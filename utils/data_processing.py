@@ -1,5 +1,3 @@
-# 2. utils/data_processing.py
-
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -81,13 +79,20 @@ def extract_region_from_address(address):
 
 @st.cache_data
 def extract_and_apply_region(df):
-    """현장 컬럼에서 지역과 주소를 추출하여 적용하는 함수"""
+    """ADDR 컬럼에서 지역과 주소를 추출하여 적용하는 함수"""
     df_copy = df.copy()
     
-    if '현장' in df_copy.columns:
+    # ADDR 컬럼이 있는 경우 우선 사용
+    if 'ADDR' in df_copy.columns:
+        results = df_copy['ADDR'].apply(extract_region_from_address)
+        df_copy['지역'] = results.map(lambda x: x[0])
+        df_copy['주소'] = results.map(lambda x: x[1])
+    # ADDR이 없고 현장 컬럼이 있는 경우
+    elif '현장' in df_copy.columns:
         results = df_copy['현장'].apply(extract_region_from_address)
         df_copy['지역'] = results.map(lambda x: x[0])
         df_copy['주소'] = results.map(lambda x: x[1])
+        # 주소가 추출되지 않은 경우 현장명으로 저장
         df_copy['현장명'] = np.where(df_copy['주소'].isna(), df_copy['현장'], None)
     
     return df_copy
@@ -412,7 +417,46 @@ def preprocess_repair_costs(df):
     
     return df_copy
 
+def preprocess_maintenance_data(df):
+    """정비일지 데이터 전처리 함수"""
+    try:
+        # 컬럼명 정리 (줄바꿈, 공백 제거)
+        df.columns = [str(col).strip().replace('\n', '') for col in df.columns]
+        
+        # 정비구분 컬럼 전처리
+        if '정비구분' in df.columns:
+            df['정비구분'] = df['정비구분'].astype(str).apply(lambda x: x.strip().replace('\n', '') if not pd.isna(x) else x)
+            # 'nan' 문자열을 실제 NaN으로 변환
+            df.loc[df['정비구분'] == 'nan', '정비구분'] = np.nan
+            
+            # 내부/외부 값 표준화 (대소문자 구분 없이)
+            def standardize_maintenance_type(value):
+                if pd.isna(value):
+                    return value
+                value_lower = str(value).lower()
+                if '내부' in value_lower:
+                    return '내부'
+                elif '외부' in value_lower:
+                    return '외부'
+                return value
+            
+            df['정비구분'] = df['정비구분'].apply(standardize_maintenance_type)
+        
+        # 수치형 데이터 처리
+        numeric_columns = ['가동시간', '수리시간', '수리비']
+        for col in numeric_columns:
+            if col in df.columns:
+                # 숫자가 아닌 값을 NaN으로 변환
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        return df
+    
+    except Exception as e:
+        st.error(f"정비일지 데이터 전처리 중 오류 발생: {e}")
+        return df
+
 def generate_fault_type_column(df):
+    """고장유형 컬럼 생성 함수"""
     if all(col in df.columns for col in ['작업유형', '정비대상', '정비작업']):
         mask = df['작업유형'].notna() & df['정비대상'].notna() & df['정비작업'].notna()
         df.loc[mask, '고장유형'] = df.loc[mask, ['작업유형', '정비대상', '정비작업']].astype(str).agg('_'.join, axis=1)
