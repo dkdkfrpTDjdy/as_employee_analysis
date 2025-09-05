@@ -26,6 +26,8 @@ st.sidebar.title("데이터 업로드")
 # 파일 업로더
 uploaded_file1 = st.sidebar.file_uploader("**정비일지 데이터 업로드**", type=["xlsx"])
 uploaded_file3 = st.sidebar.file_uploader("**소모품 출고 데이터 업로드**", type=["xlsx"])
+uploaded_file5 = st.sidebar.file_uploader("**만족도 조사 데이터 업로드**", type=["xlsx"])
+
 
 # 내장 데이터 로드 (자산조회 및 조직도)
 @st.cache_data
@@ -191,49 +193,74 @@ if uploaded_file3 is not None:
     except Exception as e:
         st.error(f"소모품 출고 데이터 처리 중 오류 발생: {e}")
 
-# **수정된 병합 로직 - 매핑률 표시**
+# 만족도 데이터 처리 (uploaded_file3 처리 후에 추가)
+if uploaded_file5 is not None:
+    try:
+        from utils.data_processing import preprocess_satisfaction_data
+        
+        # 만족도 데이터 로드
+        df5 = load_data(uploaded_file5)
+        
+        if df5 is not None:
+            # 만족도 데이터 전처리
+            df5 = preprocess_satisfaction_data(df5)
+            
+            st.session_state.df5 = df5
+            st.session_state.file_name5 = uploaded_file5.name
+            st.session_state.df5_processed = df5
+            st.success(f"만족도 조사 데이터가 성공적으로 로드되었습니다.")
+    
+    except Exception as e:
+        st.error(f"만족도 조사 데이터 처리 중 오류 발생: {e}")
+
+
+# 최종 병합 로직에서 만족도 데이터도 포함
 if 'df1_processed' in st.session_state:
     try:
         df1 = st.session_state.df1_processed
         
-        # 수리비 데이터가 있는 경우 병합
+        # 수리비 데이터 병합
         if 'df3_processed' in st.session_state:
             df3 = st.session_state.df3_processed
             df1_with_costs = merge_repair_costs(df1, df3)
             
-            # **매핑 성공률 계산 및 표시**
             total_records = len(df1_with_costs)
             matched_records = (df1_with_costs['수리비'] > 0).sum() if '수리비' in df1_with_costs.columns else 0
             match_rate = (matched_records / total_records * 100) if total_records > 0 else 0
             
-            st.info(f"📊 **데이터 매핑 결과**: 전체 {total_records:,}건 중 {matched_records:,}건 매핑 완료 ({match_rate:.1f}%)")
+            st.info(f"📊 **수리비 매핑 결과**: 전체 {total_records:,}건 중 {matched_records:,}건 매핑 완료 ({match_rate:.1f}%)")
             
             message = "정비일지와 소모품 출고 데이터 매핑이 완료되었습니다."
         else:
-            # 수리비 데이터가 없는 경우
             df1_with_costs = df1.copy()
             if '수리비' not in df1_with_costs.columns:
-                df1_with_costs['수리비'] = np.nan
+                df1_with_costs['수리비'] = 0
             message = "소모품 출고 데이터 없이 정비일지 데이터만 로드되었습니다."
         
-        # 추가 전처리
+        # 만족도 데이터 병합 (추가)
+        if 'df5_processed' in st.session_state:
+            from utils.data_processing import merge_satisfaction_with_maintenance
+            
+            df5 = st.session_state.df5_processed
+            df1_with_costs = merge_satisfaction_with_maintenance(df1_with_costs, df5)
+            
+            # 만족도 매핑 결과 표시
+            satisfaction_matched = df1_with_costs['만족도_평균'].notna().sum()
+            satisfaction_rate = (satisfaction_matched / len(df1_with_costs) * 100) if len(df1_with_costs) > 0 else 0
+            st.info(f"😊 **만족도 매핑 결과**: 전체 {len(df1_with_costs):,}건 중 {satisfaction_matched:,}건 매핑 완료 ({satisfaction_rate:.1f}%)")
+        
+        # 나머지 처리는 기존과 동일
         df1_with_costs = preprocess_maintenance_data(df1_with_costs)
-
         from utils.data_processing import generate_fault_type_column
         df1_with_costs = generate_fault_type_column(df1_with_costs)
         
-        # 소속별 수리비 통계 계산
         dept_stats = calculate_dept_repair_stats(df1_with_costs, df4)
         if dept_stats is not None:
             st.session_state.dept_repair_stats = dept_stats
         
         df1_with_costs = extract_and_apply_region(df1_with_costs)
-        
-        # 결과 저장
         st.session_state.df1_with_costs = df1_with_costs
         st.success(message)
-        
-        # 데이터 로드 상태 업데이트
         st.session_state.data_loaded = True
     
     except Exception as e:
@@ -403,3 +430,4 @@ else:
     - 💰 수리비 구간별 분포 및 고액 케이스 분석
     - 📥 Excel 리포트 다운로드 기능
     """)
+
