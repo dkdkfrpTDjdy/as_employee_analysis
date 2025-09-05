@@ -171,9 +171,8 @@ elif total_cases > df.groupby(['년', '월']).size().mean() * 1.3:
 
 st.markdown("---")
 
-# 탭으로 구분된 상세 분석
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "👥 정비자/파트별", "🔧 고장유형별", "⏱️ 시간분석", "🏢 업체/지역별", "🚛 장비별", "💰 수리비분석"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "👥 정비자/파트별", "🔧 고장유형별", "⏱️ 시간분석", "🏢 업체/지역별", "🚛 장비별", "💰 수리비분석", "😊 만족도분석"
 ])
 
 # 탭 1: 정비자/파트별 분석
@@ -727,6 +726,173 @@ with tab6:
                 st.info("고액 수리 케이스가 없습니다.")
     else:
         st.info("수리비 정보가 없습니다.")
+
+# 탭 7: 만족도 분석 (새로 추가)
+with tab7:
+    st.subheader("😊 고객 만족도 분석")
+    
+    if '만족도_평균' in filtered_df.columns and filtered_df['만족도_평균'].notna().any():
+        satisfaction_data = filtered_df[filtered_df['만족도_평균'].notna()].copy()
+        
+        if not satisfaction_data.empty:
+            # 만족도 기본 통계
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_responses = len(satisfaction_data)
+                st.metric("응답 건수", f"{total_responses}건")
+            
+            with col2:
+                avg_satisfaction = satisfaction_data['만족도_평균'].mean()
+                st.metric("평균 만족도", f"{avg_satisfaction:.2f}점")
+            
+            with col3:
+                high_satisfaction_rate = (satisfaction_data['만족도_평균'] >= 4.0).sum() / len(satisfaction_data) * 100
+                st.metric("고만족 비율", f"{high_satisfaction_rate:.1f}%")
+            
+            with col4:
+                low_satisfaction_rate = (satisfaction_data['만족도_평균'] < 3.0).sum() / len(satisfaction_data) * 100
+                st.metric("저만족 비율", f"{low_satisfaction_rate:.1f}%")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # 질문별 만족도 분석
+                st.write("**📋 질문별 만족도 점수**")
+                
+                satisfaction_categories = [col for col in satisfaction_data.columns if '만족도_' in col and col != '만족도_평균']
+                
+                if satisfaction_categories:
+                    category_scores = {}
+                    for col in satisfaction_categories:
+                        category = col.replace('만족도_', '')
+                        score = satisfaction_data[col].mean()
+                        count = satisfaction_data[col].notna().sum()
+                        if count > 0:
+                            category_scores[category] = score
+                    
+                    if category_scores:
+                        category_df = pd.DataFrame(list(category_scores.items()), columns=['질문카테고리', '평균점수'])
+                        category_df = category_df.sort_values('평균점수', ascending=True)
+                        
+                        fig = px.bar(
+                            category_df,
+                            x='평균점수',
+                            y='질문카테고리',
+                            orientation='h',
+                            title="질문별 평균 만족도",
+                            color='평균점수',
+                            color_continuous_scale='RdYlGn'
+                        )
+                        fig.update_layout(height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # 개선이 필요한 영역 식별
+                        st.write("**🔍 개선 필요 영역:**")
+                        for category, score in category_scores.items():
+                            if score < 4.0:
+                                score_color = "🔴" if score < 3.5 else "🟡"
+                                st.write(f"{score_color} {category}: {score:.2f}점")
+                else:
+                    st.info("질문별 세부 데이터가 없습니다.")
+            
+            with col2:
+                # 파트별 만족도 분석
+                if '정비자소속' in satisfaction_data.columns:
+                    st.write("**👥 파트별 만족도 분석**")
+                    
+                    part_satisfaction = satisfaction_data.groupby('정비자소속').agg({
+                        '만족도_평균': ['mean', 'count'],
+                        '수리비': 'mean'
+                    }).round(2)
+                    
+                    part_satisfaction.columns = ['평균만족도', '응답수', '평균수리비']
+                    part_satisfaction = part_satisfaction.reset_index()
+                    part_satisfaction = part_satisfaction[part_satisfaction['응답수'] >= min_responses]
+                    
+                    if not part_satisfaction.empty:
+                        part_satisfaction = part_satisfaction.sort_values('평균만족도', ascending=True)
+                        
+                        fig2 = px.bar(
+                            part_satisfaction,
+                            x='평균만족도',
+                            y='정비자소속',
+                            orientation='h',
+                            title="파트별 평균 만족도",
+                            color='평균만족도',
+                            color_continuous_scale='RdYlGn'
+                        )
+                        fig2.update_layout(height=400)
+                        st.plotly_chart(fig2, use_container_width=True)
+                        
+                        # 파트별 만족도 순위
+                        st.write("**파트별 만족도 순위:**")
+                        for idx, (_, row) in enumerate(part_satisfaction.sort_values('평균만족도', ascending=False).iterrows()):
+                            rank_icon = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
+                            satisfaction_icon = "🟢" if row['평균만족도'] >= 4.0 else "🟡" if row['평균만족도'] >= 3.5 else "🔴"
+                            st.write(f"{rank_icon} {satisfaction_icon} {row['정비자소속']}: {row['평균만족도']:.2f}점")
+                    else:
+                        st.info("응답 수가 충분하지 않습니다.")
+                else:
+                    st.info("파트별 데이터가 없습니다.")
+            
+            # 만족도와 수리비/시간 상관관계 분석
+            st.write("**🔗 만족도 영향 요인 분석**")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # 수리비와 만족도 상관관계
+                if satisfaction_data['수리비'].sum() > 0:
+                    correlation_cost = satisfaction_data['만족도_평균'].corr(satisfaction_data['수리비'])
+                    
+                    if abs(correlation_cost) > 0.3:
+                        direction = "높을수록" if correlation_cost > 0 else "낮을수록"
+                        strength = "강한" if abs(correlation_cost) > 0.5 else "중간"
+                        st.write(f"💰 **수리비 영향**: {strength} 상관관계")
+                        st.write(f"수리비가 {direction} 만족도 증가")
+                        st.write(f"상관계수: {correlation_cost:.3f}")
+                    else:
+                        st.write("💰 **수리비 영향**: 약한 관계")
+                        st.write(f"상관계수: {correlation_cost:.3f}")
+            
+            with col2:
+                # 수리시간과 만족도 상관관계
+                if '수리시간' in satisfaction_data.columns and satisfaction_data['수리시간'].sum() > 0:
+                    correlation_time = satisfaction_data['만족도_평균'].corr(satisfaction_data['수리시간'])
+                    
+                    if abs(correlation_time) > 0.3:
+                        direction = "길수록" if correlation_time > 0 else "짧을수록"
+                        strength = "강한" if abs(correlation_time) > 0.5 else "중간"
+                        st.write(f"⏱️ **수리시간 영향**: {strength} 상관관계")
+                        st.write(f"수리시간이 {direction} 만족도 증가")
+                        st.write(f"상관계수: {correlation_time:.3f}")
+                    else:
+                        st.write("⏱️ **수리시간 영향**: 약한 관계")
+                        st.write(f"상관계수: {correlation_time:.3f}")
+                else:
+                    st.info("수리시간 데이터 없음")
+            
+            with col3:
+                # 가동시간과 만족도 상관관계
+                if '가동시간' in satisfaction_data.columns and satisfaction_data['가동시간'].sum() > 0:
+                    correlation_operation = satisfaction_data['만족도_평균'].corr(satisfaction_data['가동시간'])
+                    
+                    if abs(correlation_operation) > 0.3:
+                        direction = "길수록" if correlation_operation > 0 else "짧을수록"
+                        strength = "강한" if abs(correlation_operation) > 0.5 else "중간"
+                        st.write(f"🔧 **가동시간 영향**: {strength} 상관관계")
+                        st.write(f"가동시간이 {direction} 만족도 증가")
+                        st.write(f"상관계수: {correlation_operation:.3f}")
+                    else:
+                        st.write("🔧 **가동시간 영향**: 약한 관계")
+                        st.write(f"상관계수: {correlation_operation:.3f}")
+                else:
+                    st.info("가동시간 데이터 없음")
+        else:
+            st.info("만족도 응답 데이터가 없습니다.")
+    else:
+        st.info("만족도 데이터가 없습니다. 만족도 조사 데이터를 업로드해주세요.")
 
 # 하단 - 월말 리포트 요약
 st.markdown("---")
