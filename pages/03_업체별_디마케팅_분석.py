@@ -228,6 +228,90 @@ with col2:
 # 위험도 분석
 st.header("🚨 디마케팅 위험도 분석")
 
+# 위험도 분석
+st.header("🚨 디마케팅 위험도 분석")
+
+# 만족도 정보가 있는 경우 추가 분석
+if '만족도_평균' in df_filtered.columns and df_filtered['만족도_평균'].notna().any():
+    st.subheader("😊 위험도 + 만족도 통합 분석")
+    
+    # 만족도가 있는 데이터만 필터링
+    satisfaction_data = df_filtered[df_filtered['만족도_평균'].notna()].copy()
+    
+    if not satisfaction_data.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 업체별 만족도 vs 수리비 관계
+            client_col = '현장명' if '현장명' in satisfaction_data.columns else '업체명'
+            
+            client_satisfaction_cost = satisfaction_data.groupby(client_col).agg({
+                '만족도_평균': 'mean',
+                '수리비': 'sum',
+                '관리번호': 'count'
+            }).reset_index()
+            
+            client_satisfaction_cost.columns = [client_col, '평균만족도', '총수리비', 'AS건수']
+            
+            # 업체명이 너무 길면 줄임
+            client_satisfaction_cost['업체명_short'] = client_satisfaction_cost[client_col].apply(
+                lambda x: str(x)[:15] + "..." if len(str(x)) > 15 else str(x)
+            )
+            
+            fig = px.scatter(
+                client_satisfaction_cost,
+                x='총수리비',
+                y='평균만족도',
+                size='AS건수',
+                hover_name='업체명_short',
+                title="업체별 수리비 vs 만족도 관계",
+                color='평균만족도',
+                color_continuous_scale='RdYlGn'
+            )
+            
+            # 기준선 추가
+            fig.add_hline(y=4.0, line_dash="dash", line_color="gray", annotation_text="만족도 4.0")
+            fig.add_vline(x=client_satisfaction_cost['총수리비'].median(), line_dash="dash", line_color="gray", annotation_text="수리비 중앙값")
+            
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # 문제 업체 식별 (높은 수리비 + 낮은 만족도)
+            st.write("**🚨 우선 관리 대상 업체**")
+            
+            high_cost_threshold = client_satisfaction_cost['총수리비'].quantile(0.7)
+            problem_clients = client_satisfaction_cost[
+                (client_satisfaction_cost['총수리비'] >= high_cost_threshold) &
+                (client_satisfaction_cost['평균만족도'] < 4.0)
+            ].sort_values('평균만족도')
+            
+            if not problem_clients.empty:
+                st.write("**높은 수리비 + 낮은 만족도:**")
+                for _, client in problem_clients.head(5).iterrows():
+                    name_short = str(client[client_col])[:20] + "..." if len(str(client[client_col])) > 20 else str(client[client_col])
+                    st.write(f"🔴 **{name_short}**")
+                    st.write(f"   수리비: {client['총수리비']:,.0f}원 | 만족도: {client['평균만족도']:.1f}점")
+            else:
+                st.success("문제 업체가 없습니다!")
+            
+            # 우수 업체 (낮은 수리비 + 높은 만족도)
+            st.write("**✅ 우수 관리 업체**")
+            
+            low_cost_threshold = client_satisfaction_cost['총수리비'].quantile(0.3)
+            excellent_clients = client_satisfaction_cost[
+                (client_satisfaction_cost['총수리비'] <= low_cost_threshold) &
+                (client_satisfaction_cost['평균만족도'] >= 4.5)
+            ].sort_values('평균만족도', ascending=False)
+            
+            if not excellent_clients.empty:
+                for _, client in excellent_clients.head(3).iterrows():
+                    name_short = str(client[client_col])[:20] + "..." if len(str(client[client_col])) > 20 else str(client[client_col])
+                    st.write(f"🟢 **{name_short}**")
+                    st.write(f"   수리비: {client['총수리비']:,.0f}원 | 만족도: {client['평균만족도']:.1f}점")
+            else:
+                st.info("해당 조건의 업체가 없습니다.")
+
 # 전체 데이터를 딕셔너리 리스트로 변환
 total_data_list = df_filtered.to_dict('records')
 
@@ -335,6 +419,7 @@ st.header("🎯 디마케팅 검토 대상 업체")
 risk_threshold = st.slider("위험도 점수 기준", 0.5, 5.0, 1.5, 0.1)
 risky_clients = risk_df[risk_df['위험도점수'] >= risk_threshold].head(10)
 
+# 고위험 업체 상세 분석 부분에서 만족도 정보 추가
 if len(risky_clients) == 0:
     st.info("선택한 기준에 해당하는 위험 업체가 없습니다.")
 else:
@@ -343,11 +428,11 @@ else:
     for idx, client in risky_clients.iterrows():
         risk_icon, risk_desc = get_risk_level(client['위험도점수'])
         
-        # 업체명이 너무 길면 줄임
         client_name_display = str(client['업체명'])[:30] + "..." if len(str(client['업체명'])) > 30 else str(client['업체명'])
         
         with st.expander(f"{risk_icon} {client_name_display} (위험도: {client['위험도점수']:.2f})"):
             
+            # 기존 KPI
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -363,44 +448,81 @@ else:
                     st.metric("최근 수리일", client['최근수리일'].strftime('%Y-%m-%d'))
                 st.metric("활동 기간", f"{client['활동기간']}일")
             
-            # 해당 업체의 상세 정보
+            # 만족도 정보 추가
             client_detail = df_filtered[df_filtered['업체명'] == client['업체명']]
             
-            st.write("**📋 상세 정보**")
-            col1, col2 = st.columns(2)
+            if '만족도_평균' in client_detail.columns and client_detail['만족도_평균'].notna().any():
+                st.write("**😊 고객 만족도 정보**")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    avg_satisfaction = client_detail['만족도_평균'].mean()
+                    satisfaction_count = client_detail['만족도_평균'].notna().sum()
+                    
+                    satisfaction_color = "🟢" if avg_satisfaction >= 4.0 else "🟡" if avg_satisfaction >= 3.5 else "🔴"
+                    st.write(f"{satisfaction_color} **평균 만족도**: {avg_satisfaction:.2f}점 ({satisfaction_count}건 응답)")
+                    
+                    # 질문별 세부 점수
+                    satisfaction_detail_cols = [col for col in client_detail.columns if '만족도_' in col and col != '만족도_평균']
+                    if satisfaction_detail_cols:
+                        for col in satisfaction_detail_cols:
+                            category = col.replace('만족도_', '')
+                            score = client_detail[col].mean()
+                            if score > 0:
+                                st.write(f"  • {category}: {score:.2f}점")
+                
+                with col2:
+                    # 만족도 기반 위험도 재평가
+                    if avg_satisfaction < 3.5 and client['위험도점수'] > 2.0:
+                        st.error("⚠️ **최우선 관리 대상**: 고위험 + 낮은 만족도")
+                    elif avg_satisfaction >= 4.5 and client['위험도점수'] > 2.0:
+                        st.warning("💡 **비용 관리 집중**: 만족도는 높으나 비용 부담")
+                    elif avg_satisfaction < 3.5:
+                        st.info("🔧 **서비스 품질 개선**: 만족도 향상 우선")
+                    else:
+                        st.success("✅ 만족도 양호")
             
-            with col1:
-                if '작업유형' in client_detail.columns:
-                    st.write("주요 작업 유형:")
-                    work_types = client_detail['작업유형'].value_counts().head(3)
-                    for work, count in work_types.items():
-                        st.write(f"• {work}: {count}건")
-            
-            with col2:
-                if '브랜드' in client_detail.columns:
-                    st.write("주요 장비 브랜드:")
-                    brands = client_detail['브랜드'].value_counts().head(3)
-                    for brand, count in brands.items():
-                        st.write(f"• {brand}: {count}건")
-            
-            # 권고사항
+            # 기존 상세 정보 및 권고사항은 그대로 유지하되, 만족도 고려하여 권고사항 수정
             st.write("**💡 디마케팅 권고사항**")
             
-            if client['위험도점수'] >= 3.0:
-                st.error("🚨 **즉시 계약 검토 필요** - 매우 높은 위험도")
-                st.write("- 계약 해지 또는 대폭적인 조건 변경 검토")
-                st.write("- 수리비 상한선 설정 또는 유상 전환")
-            elif client['위험도점수'] >= 2.0:
-                st.warning("⚠️ **계약 조건 재협상 검토** - 높은 위험도")
-                st.write("- 월 수리비 한도 설정")
-                st.write("- 일부 수리 항목 유상 전환")
-            elif client['위험도점수'] >= 1.5:
-                st.info("💡 **모니터링 강화** - 중간 위험도")
-                st.write("- 월별 수리비 모니터링 강화")
-                st.write("- 예방정비 교육 실시")
+            # 만족도 정보 반영한 권고사항
+            if '만족도_평균' in client_detail.columns and client_detail['만족도_평균'].notna().any():
+                avg_satisfaction = client_detail['만족도_평균'].mean()
+                
+                if client['위험도점수'] >= 3.0:
+                    if avg_satisfaction >= 4.0:
+                        st.warning("⚠️ **계약 조건 강화 검토** - 높은 위험도이지만 만족도 양호")
+                        st.write("- 수리비 상한선 설정 또는 일부 유상 전환")
+                        st.write("- 고객 관계 유지하면서 비용 절감 방안 모색")
+                    else:
+                        st.error("🚨 **즉시 계약 검토 필요** - 높은 위험도 + 낮은 만족도")
+                        st.write("- 계약 해지 또는 대폭적인 조건 변경 검토")
+                        st.write("- 서비스 품질 개선 후에도 지속적인 문제 시 계약 종료")
+                elif client['위험도점수'] >= 2.0:
+                    if avg_satisfaction >= 4.0:
+                        st.info("💰 **비용 관리 강화** - 만족도는 높으나 비용 부담")
+                        st.write("- 월 수리비 한도 설정")
+                        st.write("- 예방정비 교육으로 고장 빈도 감소")
+                    else:
+                        st.warning("⚠️ **종합적 개선 필요** - 위험도와 만족도 모두 문제")
+                        st.write("- 서비스 품질 개선 + 비용 절감 방안")
+                        st.write("- 3개월 집중 관리 후 재평가")
+                elif avg_satisfaction < 3.5:
+                    st.info("🔧 **서비스 품질 개선 집중** - 낮은 만족도 개선 우선")
+                    st.write("- 해당 업체 전담 정비자 교육")
+                    st.write("- 정기적인 만족도 모니터링")
+                else:
+                    st.success("✅ 현재 특별한 조치 불필요")
             else:
-                st.success("✅ 현재 특별한 조치 불필요")
-
+                # 기존 권고사항 (만족도 정보 없는 경우)
+                if client['위험도점수'] >= 3.0:
+                    st.error("🚨 **즉시 계약 검토 필요** - 매우 높은 위험도")
+                elif client['위험도점수'] >= 2.0:
+                    st.warning("⚠️ **계약 조건 재협상 검토** - 높은 위험도")
+                else:
+                    st.success("✅ 현재 특별한 조치 불필요")
+                    
 # 위험도별 상세 통계
 st.header("📊 위험도별 상세 통계")
 
