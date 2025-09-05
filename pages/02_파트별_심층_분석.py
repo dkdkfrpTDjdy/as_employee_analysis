@@ -303,7 +303,7 @@ if '정비자소속' in df.columns:
                     else:
                         st.info("반복 수리 케이스 없음")
 
-            # 파트 성과 요약
+            # 파트 성과 요약 (기존 코드)
             st.write("**📊 성과 요약 및 개선 포인트**")
             
             # 전체 평균과 비교
@@ -317,6 +317,52 @@ if '정비자소속' in df.columns:
             else:
                 st.info("💡 평균 수리비가 전체 평균 수준입니다.")
 
+            # 만족도 분석 추가
+            if '만족도_평균' in part_data.columns and part_data['만족도_평균'].notna().any():
+                st.write("**😊 고객 만족도 분석**")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    avg_satisfaction = part_data['만족도_평균'].mean()
+                    satisfaction_count = part_data['만족도_평균'].notna().sum()
+                    
+                    satisfaction_color = "🟢" if avg_satisfaction >= 4.5 else "🟡" if avg_satisfaction >= 4.0 else "🟠" if avg_satisfaction >= 3.5 else "🔴"
+                    st.write(f"{satisfaction_color} **평균 만족도**: {avg_satisfaction:.2f}점 ({satisfaction_count}건 응답)")
+                    
+                    # 전체 평균과 비교
+                    전체_평균만족도 = df['만족도_평균'].mean() if '만족도_평균' in df.columns else 0
+                    if 전체_평균만족도 > 0:
+                        if avg_satisfaction > 전체_평균만족도 * 1.1:
+                            st.success(f"✅ 전체 평균({전체_평균만족도:.2f}점)보다 높은 만족도")
+                        elif avg_satisfaction < 전체_평균만족도 * 0.9:
+                            st.warning(f"⚠️ 전체 평균({전체_평균만족도:.2f}점)보다 낮은 만족도")
+                        else:
+                            st.info("💡 전체 평균 수준의 만족도")
+                
+                with col2:
+                    # 질문별 만족도 세부 점수
+                    satisfaction_detail_cols = [col for col in part_data.columns if '만족도_' in col and col != '만족도_평균']
+                    if satisfaction_detail_cols:
+                        st.write("**질문별 세부 점수:**")
+                        for col in satisfaction_detail_cols:
+                            category = col.replace('만족도_', '')
+                            score = part_data[col].mean()
+                            if score > 0:
+                                score_icon = "🟢" if score >= 4.5 else "🟡" if score >= 4.0 else "🔴"
+                                st.write(f"  {score_icon} {category}: {score:.2f}점")
+                
+                # 만족도가 낮은 케이스 분석
+                low_satisfaction_cases = part_data[part_data['만족도_평균'] < 3.5]
+                if not low_satisfaction_cases.empty:
+                    st.write(f"**😞 낮은 만족도 케이스**: {len(low_satisfaction_cases)}건")
+                    
+                    # 낮은 만족도의 주요 원인 분석
+                    if '작업유형' in low_satisfaction_cases.columns:
+                        low_work_types = low_satisfaction_cases['작업유형'].value_counts().head(3)
+                        st.write("주요 작업 유형:")
+                        for work_type, count in low_work_types.items():
+                            st.write(f"  • {work_type}: {count}건")
 else:
     st.error("정비자소속 데이터가 없습니다. 데이터를 확인해주세요.")
 
