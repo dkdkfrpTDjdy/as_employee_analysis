@@ -1,5 +1,4 @@
-# pages/03_업체별_디마케팅_분석.py
-
+# 3. pages/03_업체별_디마케팅_분석.py 전체 코드
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,20 +25,24 @@ if 'df1_with_costs' not in st.session_state:
 original_df = st.session_state.df1_with_costs
 df = original_df.copy()
 
-# 현장명 컬럼 처리
-if '현장명' not in df.columns:
-    if '현장' in df.columns:
-        df = df.rename(columns={'현장': '현장명'})
-    else:
-        st.error("현장명 또는 현장 컬럼이 없습니다.")
-        st.stop()
+# 현장명 컬럼 처리 - 현장명이 있으면 그대로 사용, 없으면 업체명 사용
+client_col = None
+if '현장명' in df.columns and df['현장명'].notna().any():
+    client_col = '현장명'
+elif '업체명' in df.columns and df['업체명'].notna().any():
+    client_col = '업체명'
+elif '현장' in df.columns and df['현장'].notna().any():
+    client_col = '현장'
+else:
+    st.error("현장명, 업체명, 또는 현장 컬럼이 없습니다.")
+    st.stop()
 
-# 데이터 정리 - 완전히 새로운 DataFrame 생성
+# 데이터 정리
 clean_data = []
 for idx, row in df.iterrows():
-    if pd.notna(row.get('현장명')):
+    if pd.notna(row.get(client_col)):
         clean_row = row.to_dict()
-        clean_row['현장명'] = str(clean_row['현장명'])
+        clean_row['업체명'] = str(clean_row[client_col])
         
         # 수리비 처리
         if '수리비' in clean_row:
@@ -98,13 +101,13 @@ if '정비일자' in df_clean.columns and df_clean['정비일자'].notna().any()
 min_cases = st.sidebar.slider("최소 AS 건수 (분석 대상)", 1, 20, 3)
 
 # 업체별 건수 계산 및 필터링
-client_counts = df_clean['현장명'].value_counts()
+client_counts = df_clean['업체명'].value_counts()
 valid_clients = client_counts[client_counts >= min_cases].index.tolist()
 
 # 최종 필터링된 데이터
 final_data = []
 for idx, row in df_clean.iterrows():
-    if row['현장명'] in valid_clients:
+    if row['업체명'] in valid_clients:
         final_data.append(row.to_dict())
 
 df_filtered = pd.DataFrame(final_data)
@@ -130,7 +133,7 @@ def calculate_client_score(client_data_dict, total_data_dict):
     all_costs = [row['수리비'] for row in total_data_dict]
     global_avg_cost = sum(all_costs) / len(all_costs) if all_costs else 1
     
-    unique_clients = len(set([row['현장명'] for row in total_data_dict]))
+    unique_clients = len(set([row['업체명'] for row in total_data_dict]))
     global_avg_cases = len(total_data_dict) / unique_clients if unique_clients > 0 else 1
     
     # 정규화된 점수 계산
@@ -147,8 +150,8 @@ st.header("📊 전체 업체 현황")
 
 # 업체별 통계 계산
 client_stats_dict = {}
-for client in df_filtered['현장명'].unique():
-    client_data = df_filtered[df_filtered['현장명'] == client]
+for client in df_filtered['업체명'].unique():
+    client_data = df_filtered[df_filtered['업체명'] == client]
     
     total_cost = client_data['수리비'].sum()
     case_count = len(client_data)
@@ -163,7 +166,7 @@ for client in df_filtered['현장명'].unique():
         last_date = None
     
     client_stats_dict[client] = {
-        '현장명': client,
+        '업체명': client,
         '총수리비': total_cost,
         '평균수리비': avg_cost,
         'AS건수': case_count,
@@ -181,10 +184,16 @@ with col1:
     top_cost_clients = client_stats_df.nlargest(10, '총수리비')
     
     if not top_cost_clients.empty:
+        # 업체명이 너무 길면 줄임
+        top_cost_clients_display = top_cost_clients.copy()
+        top_cost_clients_display['업체명_short'] = top_cost_clients_display['업체명'].apply(
+            lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
+        )
+        
         fig = px.bar(
-            top_cost_clients,
+            top_cost_clients_display,
             x='총수리비',
-            y='현장명',
+            y='업체명_short',
             orientation='h',
             title="업체별 총 수리비",
             color='총수리비',
@@ -198,10 +207,16 @@ with col2:
     top_case_clients = client_stats_df.nlargest(10, 'AS건수')
     
     if not top_case_clients.empty:
+        # 업체명이 너무 길면 줄임
+        top_case_clients_display = top_case_clients.copy()
+        top_case_clients_display['업체명_short'] = top_case_clients_display['업체명'].apply(
+            lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
+        )
+        
         fig2 = px.bar(
-            top_case_clients,
+            top_case_clients_display,
             x='AS건수',
-            y='현장명',
+            y='업체명_short',
             orientation='h',
             title="업체별 AS 건수",
             color='AS건수',
@@ -218,8 +233,8 @@ total_data_list = df_filtered.to_dict('records')
 
 # 업체별 위험도 계산
 risk_analysis = []
-for client in df_filtered['현장명'].unique():
-    client_data_list = [row for row in total_data_list if row['현장명'] == client]
+for client in df_filtered['업체명'].unique():
+    client_data_list = [row for row in total_data_list if row['업체명'] == client]
     
     score, avg_cost, case_count, total_cost = calculate_client_score(client_data_list, total_data_list)
     
@@ -281,8 +296,14 @@ col1, col2 = st.columns([2, 1])
 with col1:
     st.subheader("📊 업체별 위험도 분포")
     
+    # 업체명이 너무 길면 hover에서만 전체 이름 표시
+    risk_df_display = risk_df.copy()
+    risk_df_display['업체명_short'] = risk_df_display['업체명'].apply(
+        lambda x: x[:15] + "..." if len(str(x)) > 15 else str(x)
+    )
+    
     fig = px.scatter(
-        risk_df,
+        risk_df_display,
         x='AS건수',
         y='총수리비',
         color='위험도점수',
@@ -322,7 +343,10 @@ else:
     for idx, client in risky_clients.iterrows():
         risk_icon, risk_desc = get_risk_level(client['위험도점수'])
         
-        with st.expander(f"{risk_icon} {client['업체명']} (위험도: {client['위험도점수']:.2f})"):
+        # 업체명이 너무 길면 줄임
+        client_name_display = str(client['업체명'])[:30] + "..." if len(str(client['업체명'])) > 30 else str(client['업체명'])
+        
+        with st.expander(f"{risk_icon} {client_name_display} (위험도: {client['위험도점수']:.2f})"):
             
             col1, col2, col3 = st.columns(3)
             
@@ -339,15 +363,81 @@ else:
                     st.metric("최근 수리일", client['최근수리일'].strftime('%Y-%m-%d'))
                 st.metric("활동 기간", f"{client['활동기간']}일")
             
+            # 해당 업체의 상세 정보
+            client_detail = df_filtered[df_filtered['업체명'] == client['업체명']]
+            
+            st.write("**📋 상세 정보**")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if '작업유형' in client_detail.columns:
+                    st.write("주요 작업 유형:")
+                    work_types = client_detail['작업유형'].value_counts().head(3)
+                    for work, count in work_types.items():
+                        st.write(f"• {work}: {count}건")
+            
+            with col2:
+                if '브랜드' in client_detail.columns:
+                    st.write("주요 장비 브랜드:")
+                    brands = client_detail['브랜드'].value_counts().head(3)
+                    for brand, count in brands.items():
+                        st.write(f"• {brand}: {count}건")
+            
             # 권고사항
             st.write("**💡 디마케팅 권고사항**")
             
             if client['위험도점수'] >= 3.0:
-                st.write("• 🚨 **즉시 계약 검토 필요** - 매우 높은 위험도")
+                st.error("🚨 **즉시 계약 검토 필요** - 매우 높은 위험도")
+                st.write("- 계약 해지 또는 대폭적인 조건 변경 검토")
+                st.write("- 수리비 상한선 설정 또는 유상 전환")
             elif client['위험도점수'] >= 2.0:
-                st.write("• ⚠️ **계약 조건 재협상 검토** - 높은 위험도")
+                st.warning("⚠️ **계약 조건 재협상 검토** - 높은 위험도")
+                st.write("- 월 수리비 한도 설정")
+                st.write("- 일부 수리 항목 유상 전환")
+            elif client['위험도점수'] >= 1.5:
+                st.info("💡 **모니터링 강화** - 중간 위험도")
+                st.write("- 월별 수리비 모니터링 강화")
+                st.write("- 예방정비 교육 실시")
             else:
-                st.write("• ✅ 현재 특별한 조치 불필요")
+                st.success("✅ 현재 특별한 조치 불필요")
+
+# 위험도별 상세 통계
+st.header("📊 위험도별 상세 통계")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("위험등급별 업체 통계")
+    risk_summary = risk_df.groupby('위험등급').agg({
+        '업체명': 'count',
+        '총수리비': 'sum',
+        '평균건당수리비': 'mean',
+        'AS건수': 'sum'
+    }).round(0)
+    risk_summary.columns = ['업체수', '총수리비합계', '평균건당수리비', '총AS건수']
+    
+    st.dataframe(
+        risk_summary.style.format({
+            '총수리비합계': '{:,.0f}원',
+            '평균건당수리비': '{:,.0f}원',
+            '총AS건수': '{:,}건'
+        }),
+        use_container_width=True
+    )
+
+with col2:
+    st.subheader("월평균 AS 건수 분포")
+    
+    # 월평균 AS 건수 히스토그램
+    fig = px.histogram(
+        risk_df,
+        x='월평균AS건수',
+        nbins=20,
+        title="업체별 월평균 AS 건수 분포",
+        color_discrete_sequence=['#FF6B6B']
+    )
+    fig.update_layout(height=300)
+    st.plotly_chart(fig, use_container_width=True)
 
 # 요약 통계
 st.header("📊 전체 요약")
@@ -369,3 +459,29 @@ with col3:
 with col4:
     high_risk_ratio = (high_risk_count / total_clients * 100) if total_clients > 0 else 0
     st.metric("고위험 업체 비율", f"{high_risk_ratio:.1f}%")
+
+# 데이터 다운로드
+st.markdown("---")
+st.subheader("📥 분석 결과 다운로드")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if not risk_df.empty:
+        csv_data = risk_df.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📊 위험도 분석 결과 다운로드 (CSV)",
+            data=csv_data,
+            file_name="업체별_위험도분석.csv",
+            mime="text/csv"
+        )
+
+with col2:
+    if not client_stats_df.empty:
+        stats_csv = client_stats_df.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📋 업체별 통계 다운로드 (CSV)",
+            data=stats_csv,
+            file_name="업체별_기본통계.csv",
+            mime="text/csv"
+        )
