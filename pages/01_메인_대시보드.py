@@ -1,5 +1,3 @@
-# pages/01_경영_대시보드.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -30,11 +28,6 @@ df = df.dropna(subset=['정비일자'])  # 날짜가 없는 데이터 제거
 if df.empty:
     st.error("유효한 정비일자 데이터가 없습니다.")
     st.stop()
-
-# 현장명 처리
-if '현장명' not in df.columns:
-    if '현장' in df.columns:
-        df['현장명'] = df['현장']
 
 # 수리비 처리
 if '수리비' not in df.columns:
@@ -83,7 +76,7 @@ with col3:
 current_data = df[df['년월'] == selected_month]
 prev_data = df[df['년월'] == compare_month] if compare_month else pd.DataFrame()
 
-st.header("🎯 핵심 지표 (Key Performance Indicators)")
+st.header("🎯 핵심 지표")
 
 # 기본 통계 계산
 current_cases = len(current_data)
@@ -143,9 +136,20 @@ with col4:
         st.metric("⚠️ 최고비용 파트", "데이터 없음")
 
 with col5:
-    # 최고비용 업체
+    # 최고비용 업체 (현장명 우선 사용)
     if '현장명' in current_data.columns and not current_data.empty:
         client_costs = current_data.groupby('현장명')['수리비'].sum()
+        if not client_costs.empty:
+            worst_client = client_costs.idxmax()
+            worst_client_cost = client_costs.max()
+            display_name = worst_client[:10] + "..." if len(worst_client) > 10 else worst_client
+            st.metric("🏢 최고비용 업체", 
+                     display_name, 
+                     f"{worst_client_cost:,.0f}원")
+        else:
+            st.metric("🏢 최고비용 업체", "데이터 없음")
+    elif '업체명' in current_data.columns and not current_data.empty:
+        client_costs = current_data.groupby('업체명')['수리비'].sum()
         if not client_costs.empty:
             worst_client = client_costs.idxmax()
             worst_client_cost = client_costs.max()
@@ -274,8 +278,15 @@ with col1:
 with col2:
     st.subheader("⚠️ 문제 업체 TOP 5")
     
-    if '현장명' in current_data.columns and not current_data.empty:
-        client_costs = current_data.groupby('현장명')['수리비'].sum().nlargest(5)
+    # 현장명 우선 사용
+    client_col = None
+    if '현장명' in current_data.columns:
+        client_col = '현장명'
+    elif '업체명' in current_data.columns:
+        client_col = '업체명'
+    
+    if client_col and not current_data.empty:
+        client_costs = current_data.groupby(client_col)['수리비'].sum().nlargest(5)
         
         for client, cost in client_costs.items():
             if cost > 500000:  # 50만원 이상
@@ -285,8 +296,8 @@ with col2:
                 st.write(f"   수리비: {cost:,.0f}원")
                 
                 # 전월 대비 (가능한 경우)
-                if compare_month and not prev_data.empty and '현장명' in prev_data.columns:
-                    prev_client_cost = prev_data[prev_data['현장명'] == client]['수리비'].sum()
+                if compare_month and not prev_data.empty and client_col in prev_data.columns:
+                    prev_client_cost = prev_data[prev_data[client_col] == client]['수리비'].sum()
                     if prev_client_cost > 0:
                         change_rate = ((cost - prev_client_cost) / prev_client_cost * 100)
                         st.write(f"   전월대비: {change_rate:+.1f}%")
