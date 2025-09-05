@@ -462,3 +462,98 @@ def generate_fault_type_column(df):
         df.loc[mask, '고장유형'] = df.loc[mask, ['작업유형', '정비대상', '정비작업']].astype(str).agg('_'.join, axis=1)
         df['고장유형'] = df['고장유형'].replace('nan_nan_nan', np.nan)
     return df
+
+# 기존 코드 맨 아래에 추가
+
+@st.cache_data
+def preprocess_satisfaction_data(df):
+    """만족도 조사 데이터 전처리"""
+    try:
+        df_copy = df.copy()
+        
+        # 컬럼명 정리
+        df_copy.columns = [str(col).strip().replace('\n', '') for col in df_copy.columns]
+        
+        # 관리번호 문자열 변환
+        if '관리번호' in df_copy.columns:
+            df_copy['관리번호'] = df_copy['관리번호'].astype(str)
+        
+        # 사번 문자열 변환
+        if '사번' in df_copy.columns:
+            df_copy['사번'] = df_copy['사번'].astype(str)
+        
+        # 답변 점수 숫자로 변환
+        if '답변' in df_copy.columns:
+            df_copy['만족도점수'] = pd.to_numeric(df_copy['답변'], errors='coerce')
+        
+        # 날짜 변환
+        date_cols = ['접수일시', '기사배정일시', '처리일시', '작성일시']
+        for col in date_cols:
+            if col in df_copy.columns:
+                df_copy[col] = pd.to_datetime(df_copy[col], errors='coerce')
+        
+        # 질문 카테고리 매핑
+        def categorize_question(question):
+            if pd.isna(question):
+                return '기타'
+            question = str(question).lower()
+            if '처리 속도' in question or '속도' in question:
+                return '처리속도'
+            elif '전문지식' in question or '기술' in question:
+                return '기술수준'
+            elif '응대' in question or '친절' in question or '서비스' in question:
+                return '서비스태도'
+            elif '장비 상태' in question or '수리' in question and '상태' in question:
+                return '수리품질'
+            elif '추천' in question:
+                return '추천의향'
+            else:
+                return '기타'
+        
+        if '질문' in df_copy.columns:
+            df_copy['질문카테고리'] = df_copy['질문'].apply(categorize_question)
+        
+        return df_copy
+    
+    except Exception as e:
+        st.error(f"만족도 데이터 전처리 중 오류 발생: {e}")
+        return df
+
+@st.cache_data
+def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
+    """정비일지와 만족도 데이터 병합"""
+    if maintenance_df is None or satisfaction_df is None:
+        return maintenance_df
+    
+    try:
+        df1 = maintenance_df.copy()
+        df5 = satisfaction_df.copy()
+        
+        # 관리번호 기준으로 병합
+        df1['관리번호'] = df1['관리번호'].astype(str)
+        df5['관리번호'] = df5['관리번호'].astype(str)
+        
+        # 만족도 데이터를 피벗하여 각 질문별 점수를 컬럼으로 변환
+        satisfaction_pivot = df5.pivot_table(
+            index='관리번호',
+            columns='질문카테고리',
+            values='만족도점수',
+            aggfunc='mean'
+        ).reset_index()
+        
+        # 컬럼명 변경
+        satisfaction_pivot.columns = ['관리번호'] + [f'만족도_{col}' for col in satisfaction_pivot.columns[1:]]
+        
+        # 전체 평균 만족도 계산
+        score_cols = [col for col in satisfaction_pivot.columns if '만족도_' in col]
+        if score_cols:
+            satisfaction_pivot['만족도_평균'] = satisfaction_pivot[score_cols].mean(axis=1)
+        
+        # 정비일지와 병합
+        merged_df = pd.merge(df1, satisfaction_pivot, on='관리번호', how='left')
+        
+        return merged_df
+    
+    except Exception as e:
+        st.error(f"만족도 데이터 병합 중 오류 발생: {e}")
+        return maintenance_df
