@@ -1,5 +1,4 @@
-# pages/04_월별_종합_분석.py
-
+# 4. pages/04_월별_종합_분석.py 전체 코드
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -20,13 +19,6 @@ if 'df1_with_costs' not in st.session_state:
     st.stop()
 
 df = st.session_state.df1_with_costs
-
-# 현장명 컬럼 확인 및 정리
-if '현장명' not in df.columns:
-    if '현장' in df.columns:
-        df['현장명'] = df['현장']
-    else:
-        st.warning("현장명 또는 현장 컬럼이 없습니다.")
 
 # 수치형 데이터 안전 처리
 if '수리비' not in df.columns:
@@ -158,7 +150,13 @@ with col3:
         st.metric("건당 평균 수리비", f"{avg_cost_per_case:,.0f}원")
 
 with col4:
-    unique_clients = filtered_df['현장명'].nunique() if '현장명' in filtered_df.columns else 0
+    # 현장명 우선 사용
+    if '현장명' in filtered_df.columns:
+        unique_clients = filtered_df['현장명'].nunique()
+    elif '업체명' in filtered_df.columns:
+        unique_clients = filtered_df['업체명'].nunique()
+    else:
+        unique_clients = 0
     st.metric("관련 업체 수", f"{unique_clients}개")
 
 with col5:
@@ -471,11 +469,25 @@ with tab4:
         if '지역' in filtered_df.columns:
             st.write("**🗺️ 지역별 AS 현황**")
             
-            region_analysis = filtered_df.groupby('지역').agg({
-                '관리번호': 'count',
-                '수리비': 'sum',
-                '현장명': 'nunique' if '현장명' in filtered_df.columns else lambda x: 0
-            }).rename(columns={'관리번호': '건수', '현장명': '업체수'})
+            # 현장명 우선 사용
+            client_col = None
+            if '현장명' in filtered_df.columns:
+                client_col = '현장명'
+            elif '업체명' in filtered_df.columns:
+                client_col = '업체명'
+            
+            if client_col:
+                region_analysis = filtered_df.groupby('지역').agg({
+                    '관리번호': 'count',
+                    '수리비': 'sum',
+                    client_col: 'nunique'
+                }).rename(columns={'관리번호': '건수', client_col: '업체수'})
+            else:
+                region_analysis = filtered_df.groupby('지역').agg({
+                    '관리번호': 'count',
+                    '수리비': 'sum'
+                }).rename(columns={'관리번호': '건수'})
+                region_analysis['업체수'] = 0
             
             region_analysis['평균수리비'] = (region_analysis['수리비'] / region_analysis['건수']).round(0)
             region_analysis = region_analysis.sort_values('건수', ascending=False)
@@ -506,10 +518,17 @@ with tab4:
     
     with col2:
         # 업체별 상세 분석
+        st.write("**🏢 주요 업체별 AS 현황**")
+        
+        # 현장명 우선 사용
+        client_col = None
         if '현장명' in filtered_df.columns:
-            st.write("**🏢 주요 업체별 AS 현황**")
-            
-            client_analysis = filtered_df.groupby('현장명').agg({
+            client_col = '현장명'
+        elif '업체명' in filtered_df.columns:
+            client_col = '업체명'
+        
+        if client_col:
+            client_analysis = filtered_df.groupby(client_col).agg({
                 '관리번호': ['count', lambda x: x.nunique()],
                 '수리비': 'sum'
             })
@@ -520,12 +539,16 @@ with tab4:
             top_clients = client_analysis.nlargest(10, '총수리비')
             
             if not top_clients.empty:
+                # 업체명이 너무 길면 줄임
+                top_clients_display = top_clients.copy()
+                top_clients_display.index = [name[:15] + "..." if len(str(name)) > 15 else str(name) for name in top_clients_display.index]
+                
                 fig = px.bar(
-                    x=top_clients['총수리비'],
-                    y=top_clients.index,
+                    x=top_clients_display['총수리비'],
+                    y=top_clients_display.index,
                     orientation='h',
                     title="수리비 상위 10개 업체",
-                    color=top_clients['총수리비'],
+                    color=top_clients_display['총수리비'],
                     color_continuous_scale='Reds'
                 )
                 fig.update_layout(height=400)
@@ -740,13 +763,20 @@ with col2:
             top_cost_amount = part_costs.max()
             recommendations.append(f"🔴 **{top_cost_part}** 파트의 수리비가 {top_cost_amount:,.0f}원으로 가장 높음")
     
-    if '현장명' in filtered_df.columns and not filtered_df.empty:
-        client_costs = filtered_df.groupby('현장명')['수리비'].sum()
+    # 현장명 우선 사용
+    client_col = None
+    if '현장명' in filtered_df.columns:
+        client_col = '현장명'
+    elif '업체명' in filtered_df.columns:
+        client_col = '업체명'
+    
+    if client_col and not filtered_df.empty:
+        client_costs = filtered_df.groupby(client_col)['수리비'].sum()
         if len(client_costs) > 0:
             top_cost_client = client_costs.idxmax()
             top_cost_client_amount = client_costs.max()
-            if len(top_cost_client) > 20:
-                top_cost_client = top_cost_client[:20] + "..."
+            if len(str(top_cost_client)) > 20:
+                top_cost_client = str(top_cost_client)[:20] + "..."
             recommendations.append(f"🟡 **{top_cost_client}** 업체의 수리비가 {top_cost_client_amount:,.0f}원으로 높음")
     
     if avg_cost_per_case > 500000:
@@ -784,11 +814,19 @@ with col1:
 with col2:
     # 요약 리포트 다운로드 (파트별)
     if '정비자소속' in filtered_df.columns and not filtered_df.empty:
-        summary_data = filtered_df.groupby('정비자소속').agg({
-            '관리번호': 'count',
-            '수리비': 'sum',
-            '현장명': 'nunique' if '현장명' in filtered_df.columns else lambda x: 0
-        }).rename(columns={'관리번호': '건수', '현장명': '업체수'})
+        client_col = '현장명' if '현장명' in filtered_df.columns else '업체명' if '업체명' in filtered_df.columns else None
+        
+        if client_col:
+            summary_data = filtered_df.groupby('정비자소속').agg({
+                '관리번호': 'count',
+                '수리비': 'sum',
+                client_col: 'nunique'
+            }).rename(columns={'관리번호': '건수', client_col: '업체수'})
+        else:
+            summary_data = filtered_df.groupby('정비자소속').agg({
+                '관리번호': 'count',
+                '수리비': 'sum'
+            }).rename(columns={'관리번호': '건수'})
         
         summary_csv = summary_data.to_csv(encoding='utf-8-sig')
         st.download_button(
@@ -800,8 +838,10 @@ with col2:
 
 with col3:
     # 업체별 리포트 다운로드
-    if '현장명' in filtered_df.columns and not filtered_df.empty:
-        client_summary = filtered_df.groupby('현장명').agg({
+    client_col = '현장명' if '현장명' in filtered_df.columns else '업체명' if '업체명' in filtered_df.columns else None
+    
+    if client_col and not filtered_df.empty:
+        client_summary = filtered_df.groupby(client_col).agg({
             '관리번호': 'count',
             '수리비': 'sum',
             '지역': 'first' if '지역' in filtered_df.columns else lambda x: ''
