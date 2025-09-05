@@ -1,11 +1,9 @@
-# Home.py (최소 수정 버전)
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 from utils.data_processing import load_data, merge_dataframes, extract_and_apply_region
 from utils.data_processing import calculate_previous_maintenance_dates, map_employee_data, merge_repair_costs
-from utils.data_processing import process_date_columns, preprocess_repair_costs
+from utils.data_processing import process_date_columns, preprocess_repair_costs, preprocess_maintenance_data
 from utils.visualization import setup_korean_font
 import os
 
@@ -70,45 +68,6 @@ if df4 is not None:
 
 # 메인 제목
 st.title("산업장비 AS 분석 대시보드")
-
-# 정비일지 데이터 전처리 함수 추가
-def preprocess_maintenance_data(df):
-    """정비일지 데이터 전처리 함수"""
-    try:
-        # 컬럼명 정리 (줄바꿈, 공백 제거)
-        df.columns = [str(col).strip().replace('\n', '') for col in df.columns]
-        
-        # 정비구분 컬럼 전처리
-        if '정비구분' in df.columns:
-            df['정비구분'] = df['정비구분'].astype(str).apply(lambda x: x.strip().replace('\n', '') if not pd.isna(x) else x)
-            # 'nan' 문자열을 실제 NaN으로 변환
-            df.loc[df['정비구분'] == 'nan', '정비구분'] = np.nan
-            
-            # 내부/외부 값 표준화 (대소문자 구분 없이)
-            def standardize_maintenance_type(value):
-                if pd.isna(value):
-                    return value
-                value_lower = str(value).lower()
-                if '내부' in value_lower:
-                    return '내부'
-                elif '외부' in value_lower:
-                    return '외부'
-                return value
-            
-            df['정비구분'] = df['정비구분'].apply(standardize_maintenance_type)
-        
-        # 수치형 데이터 처리
-        numeric_columns = ['가동시간', '수리시간', '수리비']
-        for col in numeric_columns:
-            if col in df.columns:
-                # 숫자가 아닌 값을 NaN으로 변환
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        return df
-    
-    except Exception as e:
-        st.error(f"정비일지 데이터 전처리 중 오류 발생: {e}")
-        return df
 
 # 소속별 수리비 통계 계산 함수
 def calculate_dept_repair_stats(df, df4=None):
@@ -176,7 +135,7 @@ if uploaded_file1 is not None:
             except Exception as e:
                 st.warning(f"정비일자 계산 중 오류 발생: {e}")
             
-            # 현장 컬럼에서 지역 정보 추출
+            # 현장 컬럼에서 지역 정보 추출 (ADDR 우선)
             try:
                 df1 = extract_and_apply_region(df1)
             except Exception as e:
@@ -291,24 +250,28 @@ if st.session_state.data_loaded:
     with data_tabs[0]:
         if 'df1_with_costs' in st.session_state:
             df1 = st.session_state.df1_with_costs
-            st.write(df1.head())
+            st.write("**데이터 샘플 (상위 10행)**")
+            st.dataframe(df1.head(10), use_container_width=True)
     
     with data_tabs[1]:
         if 'df3_processed' in st.session_state:
-            st.write(st.session_state.df3_processed.head())
+            df3 = st.session_state.df3_processed
+            st.write("**데이터 샘플 (상위 10행)**")
+            st.dataframe(df3.head(10), use_container_width=True)
         else:
             st.info("소모품 출고 데이터가 로드되지 않았습니다.")
     
     with data_tabs[2]:
         # 데이터 처리 정보 표시
-        st.write("### 데이터 처리 정보")
+        st.write("### 📊 데이터 처리 정보")
         
         col1, col2 = st.columns(2)
         
         with col1:
+            st.write("#### 정비일지 데이터")
             if 'df1_with_costs' in st.session_state:
                 df1 = st.session_state.df1_with_costs
-                st.write(f"- 정비일지 레코드 수: {len(df1):,}개")
+                st.write(f"- **레코드 수**: {len(df1):,}개")
                 
                 # 정비일자 범위 표시 (안전하게 처리)
                 if '정비일자' in df1.columns and df1['정비일자'].notna().any():
@@ -316,59 +279,127 @@ if st.session_state.data_loaded:
                         min_date = df1['정비일자'].min()
                         max_date = df1['정비일자'].max()
                         if pd.notna(min_date) and pd.notna(max_date):
-                            st.write(f"- 정비일자 범위: {min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}")
+                            st.write(f"- **정비일자 범위**: {min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}")
                     except Exception:
                         pass
                 
                 # 브랜드 및 모델 정보 표시
                 if '브랜드' in df1.columns:
-                    st.write(f"- 브랜드 수: {df1['브랜드'].nunique()}개")
+                    st.write(f"- **브랜드 수**: {df1['브랜드'].nunique()}개")
                 if '모델명' in df1.columns:
-                    st.write(f"- 모델 수: {df1['모델명'].nunique()}개")
+                    st.write(f"- **모델 수**: {df1['모델명'].nunique()}개")
+                
+                # 업체 정보 표시 (현장명 우선)
+                if '현장명' in df1.columns:
+                    st.write(f"- **업체 수**: {df1['현장명'].nunique()}개")
+                elif '업체명' in df1.columns:
+                    st.write(f"- **업체 수**: {df1['업체명'].nunique()}개")
+                
+                # 정비자 정보
+                if '정비자' in df1.columns:
+                    st.write(f"- **정비자 수**: {df1['정비자'].nunique()}명")
+                if '정비자소속' in df1.columns:
+                    st.write(f"- **소속 파트 수**: {df1['정비자소속'].nunique()}개")
         
         with col2:
+            st.write("#### 소모품 출고 데이터")
             if 'df3_processed' in st.session_state:
                 df3 = st.session_state.df3_processed
-                st.write(f"- 소모품 출고 레코드 수: {len(df3):,}개")
+                st.write(f"- **레코드 수**: {len(df3):,}개")
                 if '출고금액' in df3.columns:
-                    st.write(f"- 총 출고금액: {df3['출고금액'].sum():,.0f}원")
+                    total_amount = df3['출고금액'].sum()
+                    st.write(f"- **총 출고금액**: {total_amount:,.0f}원")
                 if '자재명' in df3.columns:
-                    st.write(f"- 자재 종류 수: {df3['자재명'].nunique()}개")
+                    st.write(f"- **자재 종류 수**: {df3['자재명'].nunique()}개")
+                
+                # 출고일자 범위
+                if '출고일자' in df3.columns and df3['출고일자'].notna().any():
+                    try:
+                        min_date = df3['출고일자'].min()
+                        max_date = df3['출고일자'].max()
+                        if pd.notna(min_date) and pd.notna(max_date):
+                            st.write(f"- **출고일자 범위**: {min_date.strftime('%Y-%m-%d')} ~ {max_date.strftime('%Y-%m-%d')}")
+                    except Exception:
+                        pass
             else:
                 st.info("소모품 출고 데이터가 로드되지 않았습니다.")
+        
+        # 데이터 품질 정보
+        st.write("### 📈 데이터 품질 정보")
+        
+        if 'df1_with_costs' in st.session_state:
+            df1 = st.session_state.df1_with_costs
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.write("**필수 컬럼 완성도**")
+                essential_cols = ['관리번호', '정비일자', '정비자번호']
+                for col in essential_cols:
+                    if col in df1.columns:
+                        completeness = (df1[col].notna().sum() / len(df1) * 100)
+                        st.write(f"- {col}: {completeness:.1f}%")
+            
+            with col2:
+                st.write("**수리비 매핑 정보**")
+                if '수리비' in df1.columns:
+                    mapped_count = (df1['수리비'] > 0).sum()
+                    mapping_rate = (mapped_count / len(df1) * 100)
+                    st.write(f"- 매핑 건수: {mapped_count:,}건")
+                    st.write(f"- 매핑률: {mapping_rate:.1f}%")
+                    
+                    if mapped_count > 0:
+                        avg_repair_cost = df1[df1['수리비'] > 0]['수리비'].mean()
+                        st.write(f"- 평균 수리비: {avg_repair_cost:,.0f}원")
+            
+            with col3:
+                st.write("**지역 정보 추출**")
+                if '지역' in df1.columns:
+                    region_count = df1['지역'].notna().sum()
+                    region_rate = (region_count / len(df1) * 100)
+                    st.write(f"- 지역 추출 건수: {region_count:,}건")
+                    st.write(f"- 지역 추출률: {region_rate:.1f}%")
+                    
+                    if region_count > 0:
+                        unique_regions = df1['지역'].nunique()
+                        st.write(f"- 지역 수: {unique_regions}개")
 
 else:
     # 데이터가 로드되지 않은 경우 안내 메시지 표시
     st.info("좌측 사이드바에서 정비일지 및 소모품 출고 데이터를 업로드해 주세요.")
     
-    # **수정된 대시보드 설명**
+    # **대시보드 설명**
     st.markdown("""
     ## 산업장비 AS 분석 대시보드 사용 안내
     
-    ### 🔍 4가지 핵심 분석
+    ### 분석 메뉴
     
-    1. **📅 월별 종합 분석**: 월별 상세 정비 현황 리포트
-        - 정비자/파트별 성과 분석
-        - 고장유형별 건수, 비율, 시간 분석  
-        - 가동시간-수리시간 연계성 분석
-        - 현장/지역별, 장비별 분석
-        - 과실여부별 분석 및 월별 트렌드
+    #### 1. **경영 대시보드** - 실시간 AS 현황 모니터링
+    - 📈 월별 AS 건수, 수리비 트렌드 분석
+    - 📊 전월 대비 증감률 및 변화 추이
+    - ⚠️ 최고비용 파트 및 업체 식별
+    - 🎯 주요 이슈 및 액션 포인트 제시
+    - 🔄 자동 새로고침 기능
     
-    2. **🔧 고장 유형 분석**: 고장 패턴 및 유형별 상세 분석
-        - 대분류(작업유형) / 중분류(정비대상) / 소분류(정비작업) 분석
-        - 브랜드-모델별 고장 히트맵
-        - 장비 특성별(연료, 운전방식) 고장 패턴
-        - 상위 고장 유형 목록
+    #### 2. **파트별 심층 분석** - 정비 조직 성과 평가
+    - 🏢 파트별 AS 건수, 수리비, 효율성 분석
+    - 👤 개별 정비자 성과 평가 및 순위
+    - 🚨 고비용 케이스 및 반복 수리 장비 식별
+    - ⚖️ 파트 간 비교 분석 및 벤치마킹
+    - 📈 월별 활동 트렌드 분석
     
-    3. **🚛 브랜드/모델 분석**: 장비 제조사 및 모델별 특성 분석
-        - 브랜드별 AS 비율 및 자산 대비 분석
-        - 모델별 AS 빈도 및 효율성
-        - 제조년도(연식)별 AS 패턴
-        - 브랜드-모델 조합별 상세 분석
+    #### 3. **업체별 디마케팅 분석** - 고위험 업체 관리
+    - 🎯 업체별 위험도 점수 자동 계산
+    - 🔴 수리비 및 AS 빈도 기반 위험 등급 분류
+    - 💼 디마케팅 검토 대상 업체 추천
+    - 📋 계약 조건 재협상 가이드라인
+    - 📊 업체별 상세 통계 및 트렌드
     
-    4. **🔮 정비 예측**: 데이터 기반 고장 예측 및 일정 관리
-        - 장비별 다음 정비 시기 예측
-        - 예상 고장 유형 예측
-        - 정비 우선순위 및 위험도 분석
-        - 예방정비 계획 수립 지원
+    #### 4. **월별 종합 분석** - 상세 정비 현황 리포트
+    - 👥 정비자/파트별 성과 분석
+    - 🔧 고장유형별 건수, 비율, 시간 분석  
+    - ⏱️ 가동시간-수리시간 연계성 분석
+    - 🏢 현장/지역별, 장비별 분석
+    - 💰 수리비 구간별 분포 및 고액 케이스 분석
+    - 📥 Excel 리포트 다운로드 기능
     """)
