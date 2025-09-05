@@ -1,5 +1,4 @@
-# pages/02_파트별_심층_분석.py
-
+#2. pages/02_파트별_심층_분석.py 전체 코드
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -50,7 +49,7 @@ if '정비자소속' in df.columns:
     part_stats = df.groupby('정비자소속').agg({
         '관리번호': 'count',
         '수리비': ['sum', 'mean'],
-        '수리시간': 'mean'
+        '수리시간': 'mean' if '수리시간' in df.columns else lambda x: 0
     }).round(0)
     
     part_stats.columns = ['AS건수', '총수리비', '평균수리비', '평균수리시간']
@@ -73,7 +72,7 @@ if '정비자소속' in df.columns:
             color='총수리비',
             color_continuous_scale='Reds'
         )
-        fig.update_layout(height=400)
+        fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
@@ -88,7 +87,7 @@ if '정비자소속' in df.columns:
             color='AS건수',
             color_continuous_scale='Blues'
         )
-        fig2.update_layout(height=400)
+        fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig2, use_container_width=True)
 
     # 파트별 상세 통계 테이블
@@ -176,14 +175,22 @@ if '정비자소속' in df.columns:
                     st.info("정비대상 데이터 없음")
             
             with col3:
-                st.write("**🏭 주요 담당 브랜드**")
-                if '브랜드' in part_data.columns:
-                    brands = part_data['브랜드'].value_counts().head(5)
-                    for brand, count in brands.items():
+                st.write("**🏢 주요 담당 업체**")
+                # 현장명 우선 사용
+                if '현장명' in part_data.columns:
+                    clients = part_data['현장명'].value_counts().head(5)
+                    for client, count in clients.items():
                         percentage = (count / len(part_data) * 100)
-                        st.write(f"• {brand}: {count}건 ({percentage:.1f}%)")
+                        client_short = client[:15] + "..." if len(str(client)) > 15 else str(client)
+                        st.write(f"• {client_short}: {count}건 ({percentage:.1f}%)")
+                elif '업체명' in part_data.columns:
+                    clients = part_data['업체명'].value_counts().head(5)
+                    for client, count in clients.items():
+                        percentage = (count / len(part_data) * 100)
+                        client_short = client[:15] + "..." if len(str(client)) > 15 else str(client)
+                        st.write(f"• {client_short}: {count}건 ({percentage:.1f}%)")
                 else:
-                    st.info("브랜드 데이터 없음")
+                    st.info("업체 데이터 없음")
 
             # 파트별 월별 트렌드
             if '년월' in part_data.columns:
@@ -242,12 +249,20 @@ if '정비자소속' in df.columns:
                     if not high_cost_cases.empty:
                         st.write("🔴 **고비용 수리 케이스들 (상위 10%):**")
                         for idx, case in high_cost_cases.head(5).iterrows():
-                            현장명 = case.get('현장명', case.get('현장', 'N/A'))
+                            # 업체명 우선 순위: 현장명 > 업체명
+                            if '현장명' in case and pd.notna(case['현장명']):
+                                업체명 = str(case['현장명'])
+                            elif '업체명' in case and pd.notna(case['업체명']):
+                                업체명 = str(case['업체명'])
+                            else:
+                                업체명 = 'N/A'
+                            
                             브랜드 = case.get('브랜드', 'N/A')
                             모델명 = case.get('모델명', 'N/A')
                             수리비 = case.get('수리비', 0)
                             
-                            st.write(f"• {현장명} - {브랜드} {모델명}")
+                            업체명_short = 업체명[:15] + "..." if len(업체명) > 15 else 업체명
+                            st.write(f"• {업체명_short} - {브랜드} {모델명}")
                             st.write(f"  💰 수리비: {수리비:,.0f}원")
                             
                             if '사용부품' in case and pd.notna(case['사용부품']) and case['사용부품']:
@@ -269,11 +284,20 @@ if '정비자소속' in df.columns:
                         for 관리번호, 횟수 in repeat_cases.items():
                             # 해당 장비의 최신 정보 가져오기
                             equipment_info = part_data[part_data['관리번호'] == 관리번호].iloc[-1]
-                            현장명 = equipment_info.get('현장명', equipment_info.get('현장', 'N/A'))
+                            
+                            # 업체명 우선 순위: 현장명 > 업체명
+                            if '현장명' in equipment_info and pd.notna(equipment_info['현장명']):
+                                업체명 = str(equipment_info['현장명'])
+                            elif '업체명' in equipment_info and pd.notna(equipment_info['업체명']):
+                                업체명 = str(equipment_info['업체명'])
+                            else:
+                                업체명 = 'N/A'
+                            
                             브랜드 = equipment_info.get('브랜드', 'N/A')
                             모델명 = equipment_info.get('모델명', 'N/A')
                             
-                            st.write(f"• {관리번호} ({현장명})")
+                            업체명_short = 업체명[:15] + "..." if len(업체명) > 15 else 업체명
+                            st.write(f"• {관리번호} ({업체명_short})")
                             st.write(f"  📊 수리횟수: {횟수}회")
                             st.write(f"  🏭 장비: {브랜드} {모델명}")
                     else:
@@ -297,7 +321,7 @@ else:
     st.error("정비자소속 데이터가 없습니다. 데이터를 확인해주세요.")
 
 # 파트 간 비교 분석
-if len(selected_parts) > 1:
+if 'selected_parts' in locals() and len(selected_parts) > 1:
     st.markdown("---")
     st.header("⚖️ 선택된 파트 간 비교 분석")
     
@@ -338,3 +362,55 @@ if len(selected_parts) > 1:
             color_continuous_scale='Plasma'
         )
         st.plotly_chart(fig, use_container_width=True)
+
+# 전체 파트 성과 랭킹
+st.markdown("---")
+st.header("🏆 파트 성과 랭킹")
+
+if '정비자소속' in df.columns:
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("💰 수리비 효율성 랭킹 (낮을수록 좋음)")
+        efficiency_ranking = part_stats.nsmallest(10, '건당수리비')[['정비자소속', '건당수리비', 'AS건수']]
+        
+        for idx, (_, row) in enumerate(efficiency_ranking.iterrows()):
+            medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
+            st.write(f"{medal} **{row['정비자소속']}**")
+            st.write(f"   건당 수리비: {row['건당수리비']:,.0f}원 ({row['AS건수']}건)")
+    
+    with col2:
+        st.subheader("📊 업무량 랭킹 (AS 건수 기준)")
+        volume_ranking = part_stats.nlargest(10, 'AS건수')[['정비자소속', 'AS건수', '총수리비']]
+        
+        for idx, (_, row) in enumerate(volume_ranking.iterrows()):
+            medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
+            st.write(f"{medal} **{row['정비자소속']}**")
+            st.write(f"   AS 건수: {row['AS건수']:,}건 (총 {row['총수리비']:,.0f}원)")
+
+# 데이터 다운로드
+st.markdown("---")
+st.subheader("📥 분석 결과 다운로드")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if not part_stats.empty:
+        csv_data = part_stats.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📊 파트별 통계 다운로드 (CSV)",
+            data=csv_data,
+            file_name="파트별_상세통계.csv",
+            mime="text/csv"
+        )
+
+with col2:
+    if '정비자소속' in df.columns:
+        detailed_data = df[['정비자소속', '관리번호', '정비일자', '수리비', '작업유형', '정비대상', '현장명']].copy()
+        detailed_csv = detailed_data.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button(
+            label="📄 상세 데이터 다운로드 (CSV)",
+            data=detailed_csv,
+            file_name="파트별_상세데이터.csv",
+            mime="text/csv"
+        )
