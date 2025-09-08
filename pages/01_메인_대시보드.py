@@ -198,7 +198,7 @@ with col2:
 # 하단 상세 분석 - 수정된 버전
 st.header("📋 상세 분석")
 
-tab1, tab2, tab3 = st.tabs(["파트별", "업체별", "고장유형별"])
+tab1, tab2 = st.tabs(["파트별", "업체별"])
 
 with tab1:
     st.subheader("👥 파트별 분석")
@@ -261,33 +261,6 @@ with tab2:
             st.info("업체별 데이터가 없습니다.")
     else:
         st.info("업체 정보가 없습니다.")
-
-with tab3:
-    st.subheader("🔧 고장유형별 분석")
-    
-    if '작업유형' in current_data.columns and current_data['작업유형'].notna().any():
-        valid_fault_data = current_data[current_data['작업유형'].notna()]
-        
-        if not valid_fault_data.empty:
-            fault_analysis = valid_fault_data.groupby('작업유형').agg({
-                '관리번호': 'count',
-                '수리비': 'sum'
-            })
-            fault_analysis.columns = ['건수', '총수리비']
-            fault_analysis['비율'] = (fault_analysis['건수'] / fault_analysis['건수'].sum() * 100).round(1)
-            fault_analysis = fault_analysis.sort_values('건수', ascending=False)
-            
-            st.dataframe(
-                fault_analysis.style.format({
-                    '총수리비': '{:,.0f}원',
-                    '비율': '{:.1f}%'
-                }),
-                use_container_width=True
-            )
-        else:
-            st.info("고장유형 데이터가 없습니다.")
-    else:
-        st.info("작업유형 정보가 없습니다.")
 
 # 액션 아이템
 st.markdown("---")
