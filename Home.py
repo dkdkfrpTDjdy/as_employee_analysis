@@ -416,8 +416,21 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
     
     final_columns = [col for col in keep_columns if col in result.columns]
     result = result[final_columns]
+
+    # 8. AWP 파트 제외 처리
+    if '정비자소속' in result.columns:
+        before_count = len(result)
+        # AWP가 포함된 파트 제외
+        result = result[~result['정비자소속'].str.contains('AWP', case=False, na=False)]
+        after_count = len(result)
+        
+        if before_count != after_count:
+            excluded_count = before_count - after_count
+            st.info(f"✅ AWP 파트 제외: {excluded_count}건 제외됨")
     
     return result
+
+
 
 # 사이드바
 st.sidebar.title("📁 데이터 업로드")
@@ -607,3 +620,4 @@ if st.session_state.data_loaded and 'part_satisfaction_stats' in st.session_stat
                 st.write(f"• {grade}: {count}개 파트")
     else:
         st.info("만족도 데이터가 처리되지 않았습니다.")
+
