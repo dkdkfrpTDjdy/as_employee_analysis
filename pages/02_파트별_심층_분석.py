@@ -680,7 +680,8 @@ st.subheader("📥 분석 결과 다운로드")
 col1, col2 = st.columns(2)
 
 with col1:
-    if not part_stats.empty:
+    # part_stats가 정의되어 있는지 확인
+    if 'part_stats' in locals() and not part_stats.empty:
         csv_data = part_stats.to_csv(index=False, encoding='utf-8-sig')
         st.download_button(
             label="📊 파트별 통계 다운로드 (CSV)",
@@ -688,6 +689,8 @@ with col1:
             file_name="파트별_상세통계.csv",
             mime="text/csv"
         )
+    else:
+        st.info("다운로드할 파트별 통계 데이터가 없습니다.")
 
 with col2:
     if main_part_col in df.columns:
@@ -704,3 +707,5 @@ with col2:
             file_name="파트별_상세데이터.csv",
             mime="text/csv"
         )
+    else:
+        st.info("다운로드할 상세 데이터가 없습니다.")
