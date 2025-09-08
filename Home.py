@@ -163,7 +163,7 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
         with col1:
             st.write("**📋 정비일지 정비자 정보:**")
             if '정비자' in result.columns:
-                workers = result['정비자'].value_counts().head(10)
+                workers = result['정비자'].dropna().value_counts().head(10)
                 st.write(f"• 총 정비자 수: {len(workers)}명")
                 st.write("• 상위 10명:")
                 for worker, count in workers.items():
@@ -176,16 +176,16 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             st.write(f"• 조직도 레코드: {len(df4)}건")
             st.write(f"• 조직도 컬럼: {df4.columns.tolist()}")
             
-            if '이름' in df4.columns:
-                org_names = df4['이름'].dropna().head(10)
-                st.write(f"• 조직도 이름 수: {len(df4['이름'].dropna())}명")
-                st.write("• 상위 10명:")
-                for name in org_names:
-                    st.write(f"  - '{name}'")
-            else:
-                st.error("조직도에 이름 컬럼이 없습니다!")
+            # 조직도 데이터 샘플 표시
+            st.write("• 조직도 샘플:")
+            st.dataframe(df4.head())
         
         try:
+            # 조직도 컬럼명 표준화
+            if len(df4.columns) >= 6 and '이름' not in df4.columns:
+                df4.columns = ['이름', '파트', '직급', '담당', '직책', '사번']
+                st.info("조직도 컬럼명을 표준화했습니다.")
+            
             # 매핑 시도
             if '정비자' in result.columns and '이름' in df4.columns and '파트' in df4.columns:
                 # 문자열로 변환 및 정리
@@ -195,6 +195,13 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 # 조직도에서 필요한 컬럼만 선택 (NaN 제거)
                 org_simple = df4[['이름', '파트']].dropna()
                 st.write(f"**매핑 가능한 조직도 레코드: {len(org_simple)}건**")
+                
+                # 조직도 이름들 확인
+                if len(org_simple) > 0:
+                    org_names = org_simple['이름'].unique()[:10]
+                    st.write("조직도 이름 샘플:")
+                    for name in org_names:
+                        st.write(f"  - '{name}'")
                 
                 # 매핑 전 공통 이름 확인
                 df1_workers = set(result['정비자'].dropna().unique())
@@ -206,12 +213,24 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                     st.write("공통 이름들:")
                     for name in list(common_workers)[:5]:
                         st.write(f"  - {name}")
+                else:
+                    st.warning("공통된 이름이 없습니다! 데이터를 확인해주세요.")
+                    
+                    # 유사한 이름 찾기 시도
+                    st.write("**유사한 이름 찾기:**")
+                    from difflib import get_close_matches
+                    
+                    for worker in list(df1_workers)[:5]:
+                        matches = get_close_matches(worker, list(org_workers), n=3, cutoff=0.6)
+                        if matches:
+                            st.write(f"'{worker}' → {matches}")
                 
                 # 이름으로 매핑
                 result = pd.merge(result, org_simple, left_on='정비자', right_on='이름', how='left')
                 
                 # 컬럼명 변경 및 중복 컬럼 제거
-                result = result.rename(columns={'파트': '정비자소속'})
+                if '파트' in result.columns:
+                    result = result.rename(columns={'파트': '정비자소속'})
                 
                 if '이름' in result.columns:
                     result = result.drop('이름', axis=1)
@@ -225,13 +244,17 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                     st.error("❌ 조직도 매핑 실패: 0건")
                 
                 # 매핑 실패한 경우 정비자명을 파트로 사용
-                if mapped_count < len(result) * 0.5:  # 50% 미만 매핑 시
+                if mapping_rate < 50:  # 50% 미만 매핑 시
                     unmapped_mask = result['정비자소속'].isna()
                     result.loc[unmapped_mask, '정비자소속'] = result.loc[unmapped_mask, '정비자']
                     st.warning("⚠️ 매핑률이 낮아 정비자명을 파트명으로 사용합니다.")
             
             else:
                 st.error("매핑에 필요한 컬럼이 없습니다!")
+                st.write(f"정비자 컬럼 존재: {'정비자' in result.columns}")
+                st.write(f"조직도 이름 컬럼 존재: {'이름' in df4.columns}")
+                st.write(f"조직도 파트 컬럼 존재: {'파트' in df4.columns}")
+                
                 # 정비자를 파트로 사용
                 if '정비자' in result.columns:
                     result['정비자소속'] = result['정비자']
@@ -453,3 +476,4 @@ if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 �
                 st.warning("매핑률이 80% 미만입니다.")
             else:
                 st.success("매핑률이 양호합니다.")
+
