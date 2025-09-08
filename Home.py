@@ -180,7 +180,7 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             st.warning(f"수리비 매핑 실패: {e}")
             result['수리비'] = 0
     
-    # 4. 조직도 데이터로 소속 매핑 (df4) - 완전 수정된 버전
+    # 4. 조직도 데이터로 소속 매핑 (df4) - 수정된 버전
     if df4 is not None:
         st.write("### 🔍 조직도 매핑 디버깅")
         
@@ -232,34 +232,16 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                     for name in list(common_names)[:10]:
                         st.write(f"  - '{name}'")
                 
-                # 1차: 정확한 매칭
+                # 정확한 매칭만 수행 (부분 매칭 제거)
                 org_mapping = df4_clean[['이름', '파트']].set_index('이름')['파트'].to_dict()
                 
                 def map_to_part(worker_name):
                     if pd.isna(worker_name):
                         return np.nan
+                    # 정확히 일치하는 경우만 매핑
                     return org_mapping.get(worker_name, np.nan)
                 
                 result['정비자소속'] = result['정비자_clean'].apply(map_to_part)
-                
-                # 2차: 부분 매칭 (정확한 매칭이 안 된 경우)
-                unmapped_mask = result['정비자소속'].isna()
-                unmapped_workers = result.loc[unmapped_mask, '정비자_clean'].dropna().unique()
-                
-                if len(unmapped_workers) > 0:
-                    st.write(f"**부분 매칭 시도: {len(unmapped_workers)}명**")
-                    
-                    partial_mapping = {}
-                    for worker in unmapped_workers:
-                        matches = get_close_matches(worker, list(org_set), n=1, cutoff=0.8)
-                        if matches:
-                            matched_name = matches[0]
-                            partial_mapping[worker] = org_mapping[matched_name]
-                            st.write(f"  - '{worker}' → '{matched_name}' ({org_mapping[matched_name]})")
-                    
-                    # 부분 매칭 결과 적용
-                    for worker, part in partial_mapping.items():
-                        result.loc[result['정비자_clean'] == worker, '정비자소속'] = part
                 
                 # 매핑 결과 확인
                 mapped_count = result['정비자소속'].notna().sum()
@@ -267,11 +249,19 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 
                 st.success(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
                 
-                # 매핑되지 않은 것들은 정비자명 사용
+                # 매핑되지 않은 정비자들 표시 (대체하지 않음)
                 unmapped_mask = result['정비자소속'].isna()
                 if unmapped_mask.any():
-                    result.loc[unmapped_mask, '정비자소속'] = result.loc[unmapped_mask, '정비자_clean']
-                    st.info(f"매핑되지 않은 {unmapped_mask.sum()}건은 정비자명을 파트명으로 사용")
+                    unmapped_workers = result.loc[unmapped_mask, '정비자_clean'].dropna().value_counts()
+                    st.warning(f"⚠️ 매핑되지 않은 정비자: {len(unmapped_workers)}명")
+                    
+                    # 상위 10명만 표시
+                    st.write("**매핑되지 않은 정비자 (상위 10명):**")
+                    for worker, count in unmapped_workers.head(10).items():
+                        st.write(f"  - '{worker}': {count}건")
+                    
+                    # 매핑되지 않은 것들은 '미분류'로 처리
+                    result.loc[unmapped_mask, '정비자소속'] = '미분류'
                 
                 # 임시 컬럼 제거
                 if '정비자_clean' in result.columns:
@@ -285,16 +275,16 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             
             else:
                 st.error("필요한 컬럼이 없습니다!")
-                result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+                result['정비자소속'] = '미분류'
                 
         except Exception as e:
             st.error(f"조직도 매핑 실패: {e}")
             st.exception(e)
-            result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+            result['정비자소속'] = '미분류'
     
-    # 정비자소속이 없으면 기본값 설정
-    if '정비자소속' not in result.columns:
-        result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+    else:
+        # 조직도가 없으면 미분류로 처리
+        result['정비자소속'] = '미분류'
     
     # 5. 만족도 데이터 간단 매핑 (df5)
     if df5 is not None and '관리번호' in df5.columns:
@@ -496,3 +486,4 @@ if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 �
                 st.warning("매핑률이 80% 미만입니다.")
             else:
                 st.success("매핑률이 양호합니다.")
+
