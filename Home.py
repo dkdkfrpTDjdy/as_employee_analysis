@@ -115,30 +115,51 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             st.warning(f"수리비 매핑 실패: {e}")
             result['수리비'] = 0
     
-    # 4. 조직도 데이터로 소속 매핑 (df4)
+    # 4. 조직도 데이터로 소속 매핑 (df4) - 수정된 버전
     if df4 is not None:
         try:
             # 조직도 컬럼 정리
             if len(df4.columns) >= 6:
                 df4.columns = ['이름', '파트', '직급', '담당', '직책', '사번']
             
-            # 정비자번호로 매핑
-            if '정비자번호' in result.columns and '사번' in df4.columns:
-                result['정비자번호'] = result['정비자번호'].astype(str)
-                df4['사번'] = df4['사번'].astype(str)
+            # 정비자 이름으로 매핑
+            if '정비자' in result.columns and '이름' in df4.columns:
+                # 문자열로 변환 및 공백 제거
+                result['정비자'] = result['정비자'].astype(str).str.strip()
+                df4['이름'] = df4['이름'].astype(str).str.strip()
                 
-                org_simple = df4[['사번', '파트', '이름']].dropna()
-                result = pd.merge(result, org_simple, left_on='정비자번호', right_on='사번', how='left')
-                result = result.rename(columns={'파트': '정비자소속', '이름': '정비자'})
+                # 조직도에서 필요한 컬럼만 선택
+                org_simple = df4[['이름', '파트']].dropna()
                 
-                if '사번' in result.columns:
-                    result = result.drop('사번', axis=1)
+                # 이름으로 매핑 (기존 정비자 컬럼은 유지)
+                result = pd.merge(result, org_simple, left_on='정비자', right_on='이름', how='left')
+                
+                # 컬럼명 변경 및 중복 컬럼 제거
+                result = result.rename(columns={'파트': '정비자소속'})
+                
+                # 중복된 이름 컬럼 제거 (정비자 컬럼은 유지)
+                if '이름' in result.columns:
+                    result = result.drop('이름', axis=1)
                 
                 mapped_count = result['정비자소속'].notna().sum()
-                st.info(f"✅ 조직도 매핑 완료: {mapped_count}건")
+                mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
+                st.info(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
+                
+                # 매핑 실패한 정비자들 확인 (디버깅용)
+                unmapped_workers = result[result['정비자소속'].isna()]['정비자'].value_counts()
+                if len(unmapped_workers) > 0:
+                    st.warning(f"⚠️ 매핑되지 않은 정비자: {len(unmapped_workers)}명")
+                    if st.sidebar.checkbox("매핑 실패 정비자 보기"):
+                        st.sidebar.write("**매핑 실패 정비자들:**")
+                        for worker, count in unmapped_workers.head(10).items():
+                            st.sidebar.write(f"• {worker}: {count}건")
             
+            else:
+                st.warning("정비자 또는 조직도 이름 컬럼이 없습니다.")
+                
         except Exception as e:
             st.warning(f"조직도 매핑 실패: {e}")
+            st.exception(e)
     
     # 5. 만족도 데이터 간단 매핑 (df5)
     if df5 is not None and '관리번호' in df5.columns:
@@ -292,3 +313,4 @@ else:
     - **🏢 업체별 분석**: 디마케팅 위험도 분석
     - **📅 월별 분석**: 종합 리포트 및 다운로드
     """)
+
