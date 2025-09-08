@@ -37,6 +37,9 @@ df['수리비'] = pd.to_numeric(df['수리비'], errors='coerce').fillna(0)
 # 년월 컬럼 생성
 df['년월'] = df['정비일자'].dt.to_period('M')
 
+# 만족도 데이터 확인
+has_satisfaction = '만족도_평균' in df.columns and df['만족도_평균'].notna().any()
+
 # 사이드바 - 분석 기간 선택
 st.sidebar.header("📊 분석 설정")
 
@@ -83,18 +86,38 @@ current_cases = len(current_data)
 current_cost = current_data['수리비'].sum()
 current_avg = current_cost / current_cases if current_cases > 0 else 0
 
+# 만족도 통계 (만족도 데이터가 있는 경우)
+current_satisfaction = None
+current_satisfaction_rate = None
+if has_satisfaction:
+    satisfaction_data = current_data[current_data['만족도_평균'].notna()]
+    if not satisfaction_data.empty:
+        current_satisfaction = satisfaction_data['만족도_평균'].mean()
+        if '만족도_만족률' in satisfaction_data.columns:
+            current_satisfaction_rate = satisfaction_data['만족도_만족률'].mean()
+
 # 이전 월 통계
 prev_cases = len(prev_data) if not prev_data.empty else 0
 prev_cost = prev_data['수리비'].sum() if not prev_data.empty else 0
 prev_avg = prev_cost / prev_cases if prev_cases > 0 else 0
 
+prev_satisfaction = None
+if has_satisfaction and not prev_data.empty:
+    prev_satisfaction_data = prev_data[prev_data['만족도_평균'].notna()]
+    if not prev_satisfaction_data.empty:
+        prev_satisfaction = prev_satisfaction_data['만족도_평균'].mean()
+
 # 증감률 계산
 case_change = ((current_cases - prev_cases) / prev_cases * 100) if prev_cases > 0 else 0
 cost_change = ((current_cost - prev_cost) / prev_cost * 100) if prev_cost > 0 else 0
 avg_change = ((current_avg - prev_avg) / prev_avg * 100) if prev_avg > 0 else 0
+satisfaction_change = ((current_satisfaction - prev_satisfaction) / prev_satisfaction * 100) if prev_satisfaction and current_satisfaction else None
 
-# KPI 표시
-col1, col2, col3, col4, col5 = st.columns(5)
+# KPI 표시 (만족도 포함)
+if has_satisfaction:
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+else:
+    col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     if compare_month:
@@ -162,12 +185,29 @@ with col5:
     else:
         st.metric("🏢 최고비용 업체", "데이터 없음")
 
+# 만족도 지표 추가
+if has_satisfaction:
+    with col6:
+        if current_satisfaction is not None:
+            satisfaction_color = "🟢" if current_satisfaction >= 4.0 else "🟡" if current_satisfaction >= 3.5 else "🔴"
+            if satisfaction_change is not None:
+                st.metric(f"{satisfaction_color} 평균 만족도", 
+                         f"{current_satisfaction:.2f}점", 
+                         f"{satisfaction_change:+.1f}%")
+            else:
+                st.metric(f"{satisfaction_color} 평균 만족도", f"{current_satisfaction:.2f}점")
+        else:
+            st.metric("😊 평균 만족도", "데이터 없음")
+
 st.markdown("---")
 
-# 트렌드 분석
+# 트렌드 분석 (만족도 트렌드 추가)
 st.header("📈 실시간 트렌드 분석")
 
-col1, col2 = st.columns(2)
+if has_satisfaction:
+    col1, col2, col3 = st.columns(3)
+else:
+    col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("월별 수리비 추이 (최근 12개월)")
@@ -239,10 +279,55 @@ with col2:
         
         st.plotly_chart(fig2, use_container_width=True)
 
-# 주요 이슈 분석
+# 만족도 트렌드 추가
+if has_satisfaction:
+    with col3:
+        st.subheader("월별 만족도 추이 (최근 12개월)")
+        
+        # 만족도 월별 집계
+        satisfaction_monthly = df[df['년월'].isin(recent_months) & df['만족도_평균'].notna()].groupby('년월').agg({
+            '만족도_평균': 'mean',
+            '만족도_응답수': 'sum'
+        }).reset_index()
+        satisfaction_monthly['년월_str'] = satisfaction_monthly['년월'].astype(str)
+        satisfaction_monthly = satisfaction_monthly.sort_values('년월')
+        
+        if not satisfaction_monthly.empty:
+            fig3 = go.Figure()
+            
+            fig3.add_trace(go.Scatter(
+                x=satisfaction_monthly['년월_str'],
+                y=satisfaction_monthly['만족도_평균'],
+                mode='lines+markers',
+                name='월별 평균 만족도',
+                line=dict(color='#45B7D1', width=3),
+                marker=dict(size=8)
+            ))
+            
+            # 목표선 추가 (4.0점)
+            fig3.add_hline(y=4.0, line_dash="dash", line_color="green", 
+                          annotation_text="목표: 4.0점")
+            
+            fig3.update_layout(
+                title="최근 12개월 만족도 트렌드",
+                xaxis_title="월",
+                yaxis_title="만족도 (점)",
+                yaxis=dict(range=[1, 5]),
+                height=400,
+                showlegend=False
+            )
+            
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("만족도 트렌드 분석을 위한 데이터가 부족합니다.")
+
+# 주요 이슈 분석 (만족도 이슈 추가)
 st.header("🚨 주요 이슈 및 액션 포인트")
 
-col1, col2, col3 = st.columns(3)
+if has_satisfaction:
+    col1, col2, col3, col4 = st.columns(4)
+else:
+    col1, col2, col3 = st.columns(3)
 
 with col1:
     st.subheader("🔥 수리비 급증 파트 TOP 5")
@@ -323,7 +408,45 @@ with col3:
     else:
         st.info("고장 유형 정보가 없습니다.")
 
-# 액션 아이템
+# 만족도 문제 업체 (만족도 데이터가 있는 경우)
+if has_satisfaction:
+    with col4:
+        st.subheader("😞 만족도 문제 업체")
+        
+        client_col = '현장명' if '현장명' in current_data.columns else '업체명'
+        
+        if client_col and not current_data.empty:
+            # 만족도가 있는 데이터만 필터링
+            satisfaction_current = current_data[current_data['만족도_평균'].notna()]
+            
+            if not satisfaction_current.empty:
+                client_satisfaction = satisfaction_current.groupby(client_col).agg({
+                    '만족도_평균': 'mean',
+                    '만족도_불만족률': 'mean',
+                    '수리비': 'sum'
+                }).reset_index()
+                
+                # 만족도 낮은 업체 (4.0 미만)
+                problem_satisfaction = client_satisfaction[
+                    client_satisfaction['만족도_평균'] < 4.0
+                ].sort_values('만족도_평균')
+                
+                if not problem_satisfaction.empty:
+                    for idx, row in problem_satisfaction.head(5).iterrows():
+                        satisfaction_score = row['만족도_평균']
+                        color = "🔴" if satisfaction_score < 3.0 else "🟡"
+                        client_short = row[client_col][:15] + "..." if len(row[client_col]) > 15 else row[client_col]
+                        
+                        st.write(f"{color} **{client_short}**")
+                        st.write(f"   만족도: {satisfaction_score:.2f}점")
+                        if '만족도_불만족률' in row and pd.notna(row['만족도_불만족률']):
+                            st.write(f"   불만족률: {row['만족도_불만족률']:.1f}%")
+                else:
+                    st.success("만족도 문제 업체 없음")
+            else:
+                st.info("만족도 조사 데이터 없음")
+
+# 액션 아이템 (만족도 기준 추가)
 st.markdown("---")
 st.header("📋 액션 아이템")
 
@@ -342,6 +465,13 @@ if not current_data.empty:
     # 평균 수리비 상승 확인
     if avg_change > 25:
         action_items.append(f"⚠️ **단가 상승**: 건당 평균 수리비 {avg_change:.1f}% 상승 → 수리 품질 점검")
+    
+    # 만족도 관련 액션 아이템
+    if has_satisfaction and current_satisfaction is not None:
+        if current_satisfaction < 3.5:
+            action_items.append(f"😞 **만족도 위험**: 평균 만족도 {current_satisfaction:.2f}점 → 서비스 품질 개선 시급")
+        elif satisfaction_change and satisfaction_change < -10:
+            action_items.append(f"📉 **만족도 하락**: 전월 대비 {satisfaction_change:.1f}% 하락 → 원인 분석 및 개선 필요")
 
 if not action_items:
     action_items.append("✅ 현재 특이사항 없음 - 정상 운영 중")
@@ -349,9 +479,16 @@ if not action_items:
 for item in action_items:
     st.markdown(f"- {item}")
 
-# 데이터 요약 정보
+# 데이터 요약 정보 (만족도 정보 포함)
 st.markdown("---")
-st.info(f"📊 **데이터 요약**: 분석 기간 {selected_month} | 총 {current_cases:,}건 | 총 수리비 {current_cost:,.0f}원 | 전체 데이터 기간: {available_months[-1]} ~ {available_months[0]}")
+summary_text = f"📊 **데이터 요약**: 분석 기간 {selected_month} | 총 {current_cases:,}건 | 총 수리비 {current_cost:,.0f}원"
+
+if has_satisfaction and current_satisfaction is not None:
+    summary_text += f" | 평균 만족도 {current_satisfaction:.2f}점"
+
+summary_text += f" | 전체 데이터 기간: {available_months[-1]} ~ {available_months[0]}"
+
+st.info(summary_text)
 
 # 자동 새로고침 (실제 운영시에만 사용)
 if auto_refresh:
