@@ -232,6 +232,7 @@ st.header("🚨 디마케팅 위험도 분석")
 st.header("🚨 디마케팅 위험도 분석")
 
 # 만족도 정보가 있는 경우 추가 분석
+# 만족도 정보가 있는 경우 추가 분석 (기존 코드 개선)
 if '만족도_평균' in df_filtered.columns and df_filtered['만족도_평균'].notna().any():
     st.subheader("😊 위험도 + 만족도 통합 분석")
     
@@ -242,30 +243,40 @@ if '만족도_평균' in df_filtered.columns and df_filtered['만족도_평균']
         col1, col2 = st.columns(2)
         
         with col1:
-            # 업체별 만족도 vs 수리비 관계
+            # 업체별 만족도 vs 수리비 관계 (통계적 지표 추가)
             client_col = '현장명' if '현장명' in satisfaction_data.columns else '업체명'
             
+            # 더 많은 통계 지표 집계
             client_satisfaction_cost = satisfaction_data.groupby(client_col).agg({
                 '만족도_평균': 'mean',
+                '만족도_표준편차': 'mean',
+                '만족도_만족률': 'mean',
+                '만족도_불만족률': 'mean',
+                '만족도_응답수': 'sum',
                 '수리비': 'sum',
                 '관리번호': 'count'
             }).reset_index()
             
-            client_satisfaction_cost.columns = [client_col, '평균만족도', '총수리비', 'AS건수']
+            client_satisfaction_cost.columns = [
+                client_col, '평균만족도', '만족도표준편차', '만족률', 
+                '불만족률', '총응답수', '총수리비', 'AS건수'
+            ]
             
             # 업체명이 너무 길면 줄임
             client_satisfaction_cost['업체명_short'] = client_satisfaction_cost[client_col].apply(
                 lambda x: str(x)[:15] + "..." if len(str(x)) > 15 else str(x)
             )
             
+            # 만족도 변동성도 고려한 시각화
             fig = px.scatter(
                 client_satisfaction_cost,
                 x='총수리비',
                 y='평균만족도',
                 size='AS건수',
+                color='만족률',  # 만족률로 색상 구분
                 hover_name='업체명_short',
-                title="업체별 수리비 vs 만족도 관계",
-                color='평균만족도',
+                hover_data=['불만족률', '만족도표준편차', '총응답수'],
+                title="업체별 수리비 vs 만족도 관계 (만족률 기준)",
                 color_continuous_scale='RdYlGn'
             )
             
@@ -277,31 +288,50 @@ if '만족도_평균' in df_filtered.columns and df_filtered['만족도_평균']
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # 문제 업체 식별 (높은 수리비 + 낮은 만족도)
+            # 문제 업체 식별 개선 (통계적 지표 활용)
             st.write("**🚨 우선 관리 대상 업체**")
             
             high_cost_threshold = client_satisfaction_cost['총수리비'].quantile(0.7)
+            
+            # 더 정교한 문제 업체 식별
             problem_clients = client_satisfaction_cost[
                 (client_satisfaction_cost['총수리비'] >= high_cost_threshold) &
-                (client_satisfaction_cost['평균만족도'] < 4.0)
-            ].sort_values('평균만족도')
+                ((client_satisfaction_cost['평균만족도'] < 4.0) | 
+                 (client_satisfaction_cost['불만족률'] > 20) |  # 불만족률 20% 이상
+                 (client_satisfaction_cost['만족도표준편차'] > 1.0))  # 만족도 편차 큰 경우
+            ].sort_values(['평균만족도', '만족률'])
             
             if not problem_clients.empty:
-                st.write("**높은 수리비 + 낮은 만족도:**")
+                st.write("**높은 수리비 + 만족도 문제:**")
                 for _, client in problem_clients.head(5).iterrows():
                     name_short = str(client[client_col])[:20] + "..." if len(str(client[client_col])) > 20 else str(client[client_col])
+                    
+                    # 문제 유형 분류
+                    problem_type = []
+                    if client['평균만족도'] < 4.0:
+                        problem_type.append("낮은 만족도")
+                    if client['불만족률'] > 20:
+                        problem_type.append("높은 불만족률")
+                    if client['만족도표준편차'] > 1.0:
+                        problem_type.append("만족도 불안정")
+                    
                     st.write(f"🔴 **{name_short}**")
                     st.write(f"   수리비: {client['총수리비']:,.0f}원 | 만족도: {client['평균만족도']:.1f}점")
+                    st.write(f"   만족률: {client['만족률']:.1f}% | 불만족률: {client['불만족률']:.1f}%")
+                    st.write(f"   문제: {', '.join(problem_type)}")
+                    st.write("---")
             else:
                 st.success("문제 업체가 없습니다!")
             
-            # 우수 업체 (낮은 수리비 + 높은 만족도)
+            # 우수 업체 (낮은 수리비 + 높은 만족도 + 안정성)
             st.write("**✅ 우수 관리 업체**")
             
             low_cost_threshold = client_satisfaction_cost['총수리비'].quantile(0.3)
             excellent_clients = client_satisfaction_cost[
                 (client_satisfaction_cost['총수리비'] <= low_cost_threshold) &
-                (client_satisfaction_cost['평균만족도'] >= 4.5)
+                (client_satisfaction_cost['평균만족도'] >= 4.5) &
+                (client_satisfaction_cost['만족률'] >= 80) &
+                (client_satisfaction_cost['불만족률'] <= 10)
             ].sort_values('평균만족도', ascending=False)
             
             if not excellent_clients.empty:
@@ -309,8 +339,54 @@ if '만족도_평균' in df_filtered.columns and df_filtered['만족도_평균']
                     name_short = str(client[client_col])[:20] + "..." if len(str(client[client_col])) > 20 else str(client[client_col])
                     st.write(f"🟢 **{name_short}**")
                     st.write(f"   수리비: {client['총수리비']:,.0f}원 | 만족도: {client['평균만족도']:.1f}점")
+                    st.write(f"   만족률: {client['만족률']:.1f}% | 응답수: {client['총응답수']:.0f}건")
             else:
                 st.info("해당 조건의 업체가 없습니다.")
+
+        # 만족도 분포 분석 추가
+        st.subheader("📊 만족도 분포 상세 분석")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # 만족도 등급별 분포
+            satisfaction_grades = satisfaction_data['만족도_등급'].value_counts() if '만족도_등급' in satisfaction_data.columns else None
+            
+            if satisfaction_grades is not None and not satisfaction_grades.empty:
+                fig = px.pie(
+                    values=satisfaction_grades.values,
+                    names=satisfaction_grades.index,
+                    title="만족도 등급 분포"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # 만족도 vs 수리비 상관관계
+            if len(satisfaction_data) > 5:
+                correlation = satisfaction_data['만족도_평균'].corr(satisfaction_data['수리비'])
+                st.metric("만족도-수리비 상관계수", f"{correlation:.3f}")
+                
+                if correlation < -0.3:
+                    st.error("강한 음의 상관관계: 수리비 증가 시 만족도 감소")
+                elif correlation < -0.1:
+                    st.warning("약한 음의 상관관계")
+                elif correlation > 0.1:
+                    st.info("양의 상관관계: 수리비와 만족도 동반 상승")
+                else:
+                    st.success("상관관계 없음: 독립적 관계")
+        
+        with col3:
+            # 만족도 응답률
+            total_cases = len(df_filtered)
+            satisfaction_cases = len(satisfaction_data)
+            response_rate = (satisfaction_cases / total_cases * 100) if total_cases > 0 else 0
+            
+            st.metric("만족도 조사 응답률", f"{response_rate:.1f}%")
+            
+            if response_rate < 30:
+                st.warning("응답률이 낮습니다. 만족도 조사 확대 필요")
+            elif response_rate > 70:
+                st.success("높은 응답률로 신뢰성 있는 분석")
 
 # 전체 데이터를 딕셔너리 리스트로 변환
 total_data_list = df_filtered.to_dict('records')
