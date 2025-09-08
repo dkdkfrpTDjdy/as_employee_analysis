@@ -141,52 +141,51 @@ def map_employee_data(df, org_df):
         result_df = df.copy()
         org_temp = org_df.copy()
 
-        # 조직도의 사번을 문자열로 통일
-        org_temp['사번'] = org_temp['사번'].astype(str)
-
         # 정비일지 데이터인 경우 (정비자번호 있음)
         if '정비자번호' in result_df.columns:
+            # 조직도의 사번을 문자열로 통일
+            org_temp['사번'] = org_temp['사번'].astype(str)
             # 정비자번호를 문자열로 변환
             result_df['정비자번호'] = result_df['정비자번호'].astype(str)
 
-            # 소속 정보만 가져오기 (left join)
+            # 사번으로 매핑 (left join)
             result_df = pd.merge(
                 result_df,
-                org_temp[['사번', '소속']],
+                org_temp[['사번', '파트']],
                 left_on='정비자번호',
                 right_on='사번',
                 how='left'
             )
 
             # 소속 컬럼명 변경 및 중복 컬럼 제거
-            result_df.rename(columns={'소속': '정비자소속'}, inplace=True)
+            result_df.rename(columns={'파트': '정비자소속'}, inplace=True)
             if '사번' in result_df.columns:
                 result_df.drop('사번', axis=1, inplace=True)
 
         # 수리비 데이터인 경우 (출고자 있음)
         elif '출고자' in result_df.columns:
-            # 출고자를 문자열로 변환
+            # 출고자와 이름을 문자열로 변환
             result_df['출고자'] = result_df['출고자'].astype(str)
+            org_temp['이름'] = org_temp['이름'].astype(str)
 
-            # 소속 정보만 가져오기 (left join)
+            # 이름으로 매핑 (left join)
             result_df = pd.merge(
                 result_df,
-                org_temp[['사번', '소속']],
+                org_temp[['이름', '파트', '직급', '담당', '직책']],
                 left_on='출고자',
-                right_on='사번',
+                right_on='이름',
                 how='left'
             )
 
             # 소속 컬럼명 변경 및 중복 컬럼 제거
-            result_df.rename(columns={'소속': '출고자소속'}, inplace=True)
-            if '사번' in result_df.columns:
-                result_df.drop('사번', axis=1, inplace=True)
+            result_df.rename(columns={'파트': '출고자소속'}, inplace=True)
+            if '이름' in result_df.columns:
+                result_df.drop('이름', axis=1, inplace=True)
 
         return result_df
 
     except Exception as e:
-        st.error(f"직원 데이터 매핑 중 오류 발생: {e}")
-        st.error(traceback.format_exc())
+        st.error(f"직원 데이터 매핑 중 오류 발생: {str(e)}")
         return df
 
 # 두 데이터프레임 병합 함수 - 브랜드 매핑 문제 해결
@@ -292,7 +291,7 @@ def merge_dataframes(df1, df2):
 @st.cache_data
 def merge_repair_costs(maintenance_df, parts_df):
     """
-    정비일지와 소모품 데이터를 병합하여 수리비와 사용부품을 계산합니다.
+    AS 데이터와 소모품 데이터를 병합하여 수리비와 사용부품을 계산합니다.
     조건:
     - 관리번호 일치
     - 정비자번호 == 출고자
@@ -306,8 +305,8 @@ def merge_repair_costs(maintenance_df, parts_df):
         df3 = parts_df.copy()
 
         # 필수 컬럼 확인
-        required_cols_df1 = ['관리번호', '정비일자', '정비자번호']
-        required_cols_df3 = ['관리번호', '출고일자', '출고자', '출고금액', '자재명']
+        required_cols_df1 = ['관리번호', '정비일자', '정비자']
+        required_cols_df3 = ['관리번호', '출고일자', '기사명', '출고금액', '자재명']
         for col in required_cols_df1 + required_cols_df3:
             if col not in (df1.columns if col in required_cols_df1 else df3.columns):
                 st.warning(f"필수 컬럼 누락: '{col}'")
@@ -315,12 +314,12 @@ def merge_repair_costs(maintenance_df, parts_df):
 
         # 타입 정리
         df1['관리번호'] = df1['관리번호'].astype(str)
-        df1['정비자번호'] = df1['정비자번호'].fillna("").astype(str)
         df1['정비일자'] = pd.to_datetime(df1['정비일자'], errors='coerce')
+        df1['정비자'] = df1['정비자'].fillna("")
 
         df3['관리번호'] = df3['관리번호'].astype(str)
-        df3['출고자'] = df3['출고자'].astype(str).fillna("")
         df3['출고일자'] = pd.to_datetime(df3['출고일자'], errors='coerce')
+        df3['기사명'] = df3['기사명'].fillna("")
         df3['자재명'] = df3['자재명'].fillna("")
         df3['출고금액'] = pd.to_numeric(df3['출고금액'], errors='coerce').fillna(0)
 
@@ -329,10 +328,10 @@ def merge_repair_costs(maintenance_df, parts_df):
 
         # 병합: 관리번호 + 정비자번호 매칭
         merged = pd.merge(
-            df1[['관리번호', '정비일자', '정비자번호', '원본인덱스']],
-            df3[['관리번호', '출고일자', '출고자', '출고금액', '자재명']],
-            left_on=['관리번호', '정비자번호'],
-            right_on=['관리번호', '출고자'],
+            df1[['관리번호', '정비일자', '정비자', '원본인덱스']],
+            df3[['관리번호', '출고일자', '기사명', '출고금액', '자재명']],
+            left_on=['관리번호', '정비자'],
+            right_on=['관리번호', '기사명'],
             how='inner'
         )
 
@@ -410,7 +409,7 @@ def preprocess_repair_costs(df):
 
         # 금액 컬럼 숫자로 변환
         for col in df_copy.columns:
-            if '금액' in col or '비용' in col or '단가' in col:
+            if '단가' in col or '금액' in col or '단가' in col:
                 df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
     except Exception as e:
         st.warning(f"수리비 데이터 전처리 중 오류가 발생했습니다: {e}")
@@ -521,7 +520,7 @@ def preprocess_satisfaction_data(df):
 
 @st.cache_data
 def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
-    """정비일지와 만족도 데이터 병합"""
+    """정비일지와 만족도 데이터 병합 - 정비일자, 정비자, 관리번호 기준"""
     if maintenance_df is None or satisfaction_df is None:
         return maintenance_df
     
@@ -529,28 +528,108 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
         df1 = maintenance_df.copy()
         df5 = satisfaction_df.copy()
         
-        # 관리번호 기준으로 병합
+        # 관리번호를 문자열로 통일
         df1['관리번호'] = df1['관리번호'].astype(str)
         df5['관리번호'] = df5['관리번호'].astype(str)
         
-        # 만족도 데이터를 피벗하여 각 질문별 점수를 컬럼으로 변환
-        satisfaction_pivot = df5.pivot_table(
-            index='관리번호',
-            columns='질문카테고리',
-            values='만족도점수',
-            aggfunc='mean'
-        ).reset_index()
+        # 정비자/이름을 문자열로 통일
+        df1['정비자'] = df1['정비자'].astype(str)
+        df5['이름'] = df5['이름'].astype(str)
         
-        # 컬럼명 변경
-        satisfaction_pivot.columns = ['관리번호'] + [f'만족도_{col}' for col in satisfaction_pivot.columns[1:]]
+        # 날짜 처리 - 날짜 부분만 추출
+        if '정비일자' in df1.columns:
+            df1['정비일자_날짜'] = pd.to_datetime(df1['정비일자']).dt.date
         
-        # 전체 평균 만족도 계산
-        score_cols = [col for col in satisfaction_pivot.columns if '만족도_' in col]
-        if score_cols:
-            satisfaction_pivot['만족도_평균'] = satisfaction_pivot[score_cols].mean(axis=1)
+        if '처리일자' in df5.columns:
+            df5['처리일자_날짜'] = pd.to_datetime(df5['처리일자']).dt.date
+        else:
+            st.warning("만족도 데이터에서 '처리일자' 컬럼을 찾을 수 없습니다.")
+            return maintenance_df
+        
+        # 매핑을 위한 키 생성
+        df1['매핑키'] = df1['정비일자_날짜'].astype(str) + '_' + df1['정비자'] + '_' + df1['관리번호']
+        df5['매핑키'] = df5['처리일자_날짜'].astype(str) + '_' + df5['이름'] + '_' + df5['관리번호']
+        
+        # 만족도 데이터 통계 계산
+        satisfaction_stats = df5.groupby('매핑키').agg({
+            '만족도점수': [
+                'mean',      # 평균
+                'median',    # 중앙값
+                'std',       # 표준편차
+                'min',       # 최솟값
+                'max',       # 최댓값
+                'count',     # 응답 수
+                lambda x: x.quantile(0.25),  # 1분위수
+                lambda x: x.quantile(0.75),  # 3분위수
+                lambda x: (x >= 4).sum() / len(x) * 100,  # 만족률(4점 이상 비율)
+                lambda x: (x <= 2).sum() / len(x) * 100,  # 불만족률(2점 이하 비율)
+            ]
+        }).round(2)
+        
+        # 컬럼명 정리
+        satisfaction_stats.columns = [
+            '만족도_평균', '만족도_중앙값', '만족도_표준편차', 
+            '만족도_최솟값', '만족도_최댓값', '만족도_응답수',
+            '만족도_1분위수', '만족도_3분위수', '만족도_만족률', '만족도_불만족률'
+        ]
+        
+        # 추가 통계 지표 계산
+        satisfaction_stats['만족도_범위'] = satisfaction_stats['만족도_최댓값'] - satisfaction_stats['만족도_최솟값']
+        satisfaction_stats['만족도_IQR'] = satisfaction_stats['만족도_3분위수'] - satisfaction_stats['만족도_1분위수']
+        satisfaction_stats['만족도_변동계수'] = (satisfaction_stats['만족도_표준편차'] / satisfaction_stats['만족도_평균'] * 100).round(2)
+        
+        # 만족도 등급 분류
+        def classify_satisfaction(avg_score):
+            if pd.isna(avg_score):
+                return '미조사'
+            elif avg_score >= 4.5:
+                return '매우만족'
+            elif avg_score >= 4.0:
+                return '만족'
+            elif avg_score >= 3.0:
+                return '보통'
+            elif avg_score >= 2.0:
+                return '불만족'
+            else:
+                return '매우불만족'
+        
+        satisfaction_stats['만족도_등급'] = satisfaction_stats['만족도_평균'].apply(classify_satisfaction)
+        
+        # 카테고리별 만족도도 계산
+        if '질문카테고리' in df5.columns:
+            category_pivot = df5.pivot_table(
+                index='매핑키',
+                columns='질문카테고리',
+                values='만족도점수',
+                aggfunc=['mean', 'count']
+            )
+            
+            # 카테고리별 평균 점수
+            if ('mean',) in category_pivot.columns.levels:
+                mean_cols = category_pivot['mean']
+                mean_cols.columns = [f'만족도_{col}_평균' for col in mean_cols.columns]
+                satisfaction_stats = pd.concat([satisfaction_stats, mean_cols], axis=1)
+            
+            # 카테고리별 응답 수
+            if ('count',) in category_pivot.columns.levels:
+                count_cols = category_pivot['count']
+                count_cols.columns = [f'만족도_{col}_응답수' for col in count_cols.columns]
+                satisfaction_stats = pd.concat([satisfaction_stats, count_cols], axis=1)
+        
+        # 인덱스를 컬럼으로 변환
+        satisfaction_stats = satisfaction_stats.reset_index()
         
         # 정비일지와 병합
-        merged_df = pd.merge(df1, satisfaction_pivot, on='관리번호', how='left')
+        merged_df = pd.merge(df1, satisfaction_stats, on='매핑키', how='left')
+        
+        # 임시 컬럼 제거
+        columns_to_drop = ['정비일자_날짜', '매핑키']
+        merged_df = merged_df.drop(columns=[col for col in columns_to_drop if col in merged_df.columns])
+        
+        # 매핑 결과 확인
+        matched_count = merged_df['만족도_평균'].notna().sum()
+        total_count = len(merged_df)
+        st.info(f"만족도 매핑 결과: {matched_count}/{total_count}건 매핑됨")
         
         return merged_df
     
