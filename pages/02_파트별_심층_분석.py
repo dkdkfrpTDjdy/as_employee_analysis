@@ -29,6 +29,11 @@ def prepare_part_data(df):
     else:
         df['수리시간'] = 0
     
+    # 만족도 컬럼 처리
+    satisfaction_cols = [col for col in df.columns if '만족도' in col]
+    if satisfaction_cols:
+        st.sidebar.success(f"✅ 만족도 데이터 발견: {len(satisfaction_cols)}개 컬럼")
+    
     return df
 
 df = prepare_part_data(df)
@@ -61,7 +66,7 @@ if '정비일자' in df.columns and df['정비일자'].notna().any():
 # 파트별 전체 현황
 st.header("📊 파트별 전체 현황")
 
-# 파트별 통계 계산 - 수정된 버전
+# 파트별 통계 계산 - 만족도 포함 버전
 agg_dict = {
     '관리번호': 'count',
     '수리비': ['sum', 'mean']
@@ -71,14 +76,27 @@ agg_dict = {
 if '수리시간' in df.columns and df['수리시간'].sum() > 0:
     agg_dict['수리시간'] = 'mean'
 
+# 만족도 컬럼 확인 및 추가
+satisfaction_cols = [col for col in df.columns if '만족도_평균' in col or col == '만족도_평균']
+if satisfaction_cols:
+    for col in satisfaction_cols:
+        if df[col].notna().sum() > 0:  # 실제 데이터가 있는 경우만
+            agg_dict[col] = 'mean'
+
 part_stats = df.groupby('정비자소속').agg(agg_dict).round(2)
 
 # 컬럼명 정리
+base_columns = ['AS건수', '총수리비', '평균수리비']
 if '수리시간' in agg_dict:
-    part_stats.columns = ['AS건수', '총수리비', '평균수리비', '평균수리시간']
-else:
-    part_stats.columns = ['AS건수', '총수리비', '평균수리비']
+    base_columns.append('평균수리시간')
 
+# 만족도 컬럼 추가
+satisfaction_columns = []
+for col in satisfaction_cols:
+    if col in agg_dict:
+        satisfaction_columns.append(f'평균_{col}')
+
+part_stats.columns = base_columns + satisfaction_columns
 part_stats = part_stats.reset_index()
 
 # 효율성 지표 추가
@@ -118,15 +136,43 @@ with col2:
     fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
     st.plotly_chart(fig2, use_container_width=True)
 
+# 만족도 차트 추가
+if satisfaction_columns:
+    st.subheader("😊 파트별 고객 만족도")
+    
+    # 만족도 데이터가 있는 파트만 필터링
+    satisfaction_data = part_stats[part_stats[satisfaction_columns[0]].notna()].head(10)
+    
+    if not satisfaction_data.empty:
+        fig3 = px.bar(
+            satisfaction_data,
+            x=satisfaction_columns[0],
+            y='정비자소속',
+            orientation='h',
+            color=satisfaction_columns[0],
+            color_continuous_scale='Greens',
+            title="파트별 평균 만족도"
+        )
+        fig3.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("만족도 데이터가 있는 파트가 없습니다.")
+
 # 파트별 상세 통계 테이블
 st.subheader("📋 파트별 상세 통계")
 
 # 컬럼 순서 정리
-display_columns = ['정비자소속', 'AS건수', '총수리비', '건당수리비', '효율성점수']
+display_columns = ['정비자소속', 'AS건수', '총수리비', '건당수리비']
 
 # 수리시간 컬럼이 있고 실제 데이터가 있는 경우만 추가
 if '평균수리시간' in part_stats.columns and part_stats['평균수리시간'].sum() > 0:
-    display_columns.insert(-1, '평균수리시간')
+    display_columns.append('평균수리시간')
+
+# 만족도 컬럼 추가
+if satisfaction_columns:
+    display_columns.extend(satisfaction_columns)
+
+display_columns.append('효율성점수')
 
 display_stats = part_stats[display_columns]
 
@@ -140,6 +186,11 @@ format_dict = {
 
 if '평균수리시간' in display_stats.columns:
     format_dict['평균수리시간'] = '{:.1f}시간'
+
+# 만족도 컬럼 포맷팅
+for col in satisfaction_columns:
+    if col in display_stats.columns:
+        format_dict[col] = '{:.2f}점'
 
 st.dataframe(
     display_stats.style.format(format_dict),
@@ -167,28 +218,45 @@ if selected_parts:
         
         st.subheader(f"🔧 {part} 파트 상세 분석")
         
-        # 파트 KPI
-        col1, col2, col3, col4 = st.columns(4)
+        # 파트 KPI - 만족도 포함
+        kpi_cols = 4
+        if satisfaction_columns:
+            kpi_cols = 5
         
-        with col1:
+        cols = st.columns(kpi_cols)
+        
+        with cols[0]:
             total_cases = len(part_data)
             st.metric("총 AS 건수", f"{total_cases:,}건")
         
-        with col2:
+        with cols[1]:
             total_cost = part_data['수리비'].sum()
             st.metric("총 수리비", f"{total_cost:,.0f}원")
         
-        with col3:
+        with cols[2]:
             avg_cost = part_data['수리비'].mean() if total_cases > 0 else 0
             st.metric("평균 수리비", f"{avg_cost:,.0f}원")
         
-        with col4:
+        with cols[3]:
             # 수리시간이 실제로 있는 경우만 표시
             if '수리시간' in part_data.columns and part_data['수리시간'].sum() > 0:
                 avg_time = part_data['수리시간'].mean()
                 st.metric("평균 수리시간", f"{avg_time:.1f}시간")
             else:
                 st.metric("평균 수리시간", "데이터 없음")
+        
+        # 만족도 메트릭 추가
+        if satisfaction_columns and kpi_cols == 5:
+            with cols[4]:
+                satisfaction_col = satisfaction_columns[0]
+                if satisfaction_col in part_data.columns:
+                    avg_satisfaction = part_data[satisfaction_col].mean()
+                    if pd.notna(avg_satisfaction):
+                        st.metric("평균 만족도", f"{avg_satisfaction:.2f}점")
+                    else:
+                        st.metric("평균 만족도", "데이터 없음")
+                else:
+                    st.metric("평균 만족도", "데이터 없음")
 
         # 파트별 세부 분석
         col1, col2, col3 = st.columns(3)
@@ -229,6 +297,52 @@ if selected_parts:
                     st.write(f"• {client_short}: {count}건 ({percentage:.1f}%)")
             else:
                 st.write("업체 데이터 없음")
+
+        # 만족도 상세 분석 추가
+        if satisfaction_columns:
+            st.write("**😊 만족도 상세 분석**")
+            
+            satisfaction_data = part_data[part_data[satisfaction_columns[0]].notna()]
+            
+            if not satisfaction_data.empty:
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    avg_score = satisfaction_data[satisfaction_columns[0]].mean()
+                    st.write(f"• 평균 점수: {avg_score:.2f}점")
+                    
+                    # 만족도 등급 분류
+                    if avg_score >= 4.5:
+                        grade = "매우만족 😍"
+                    elif avg_score >= 4.0:
+                        grade = "만족 😊"
+                    elif avg_score >= 3.0:
+                        grade = "보통 😐"
+                    elif avg_score >= 2.0:
+                        grade = "불만족 😞"
+                    else:
+                        grade = "매우불만족 😡"
+                    
+                    st.write(f"• 만족도 등급: {grade}")
+                
+                with col2:
+                    response_count = len(satisfaction_data)
+                    response_rate = response_count / len(part_data) * 100
+                    st.write(f"• 응답 건수: {response_count}건")
+                    st.write(f"• 응답률: {response_rate:.1f}%")
+                
+                with col3:
+                    if '만족도_만족률' in satisfaction_data.columns:
+                        satisfaction_rate = satisfaction_data['만족도_만족률'].mean()
+                        if pd.notna(satisfaction_rate):
+                            st.write(f"• 만족률: {satisfaction_rate:.1f}%")
+                    
+                    if '만족도_불만족률' in satisfaction_data.columns:
+                        dissatisfaction_rate = satisfaction_data['만족도_불만족률'].mean()
+                        if pd.notna(dissatisfaction_rate):
+                            st.write(f"• 불만족률: {dissatisfaction_rate:.1f}%")
+            else:
+                st.write("이 파트의 만족도 조사 데이터가 없습니다.")
 
         # 주의 깊게 봐야 할 케이스들
         st.write("**🚨 주의 깊게 봐야 할 케이스들**")
@@ -300,14 +414,23 @@ if len(selected_parts) > 1:
         if '수리시간' in part_data.columns and part_data['수리시간'].sum() > 0:
             comparison_item['평균수리시간'] = part_data['수리시간'].mean()
         
+        # 만족도 추가
+        if satisfaction_columns:
+            satisfaction_col = satisfaction_columns[0]
+            if satisfaction_col in part_data.columns:
+                avg_satisfaction = part_data[satisfaction_col].mean()
+                if pd.notna(avg_satisfaction):
+                    comparison_item['평균만족도'] = avg_satisfaction
+        
         comparison_data.append(comparison_item)
     
     comparison_df = pd.DataFrame(comparison_data)
     
     # 비교 차트
-    col1, col2 = st.columns(2)
+    chart_cols = 2 if '평균만족도' not in comparison_df.columns else 3
+    cols = st.columns(chart_cols)
     
-    with col1:
+    with cols[0]:
         fig = px.bar(
             comparison_df,
             x='파트',
@@ -318,7 +441,7 @@ if len(selected_parts) > 1:
         )
         st.plotly_chart(fig, use_container_width=True)
     
-    with col2:
+    with cols[1]:
         fig = px.bar(
             comparison_df,
             x='파트',
@@ -328,14 +451,28 @@ if len(selected_parts) > 1:
             color_continuous_scale='Plasma'
         )
         st.plotly_chart(fig, use_container_width=True)
+    
+    # 만족도 비교 차트
+    if chart_cols == 3 and '평균만족도' in comparison_df.columns:
+        with cols[2]:
+            fig = px.bar(
+                comparison_df,
+                x='파트',
+                y='평균만족도',
+                title="파트별 평균 만족도 비교",
+                color='평균만족도',
+                color_continuous_scale='Greens'
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 # 파트 성과 랭킹
 st.markdown("---")
 st.header("🏆 파트 성과 랭킹")
 
-col1, col2 = st.columns(2)
+ranking_cols = 2 if not satisfaction_columns else 3
+cols = st.columns(ranking_cols)
 
-with col1:
+with cols[0]:
     st.subheader("💰 수리비 효율성 랭킹")
     efficiency_ranking = part_stats.nsmallest(10, '건당수리비')[['정비자소속', '건당수리비', 'AS건수']]
     
@@ -344,7 +481,7 @@ with col1:
         st.write(f"{medal} **{row['정비자소속']}**")
         st.write(f"   건당 수리비: {row['건당수리비']:,.0f}원 ({row['AS건수']}건)")
 
-with col2:
+with cols[1]:
     st.subheader("📊 업무량 랭킹")
     volume_ranking = part_stats.nlargest(10, 'AS건수')[['정비자소속', 'AS건수', '총수리비']]
     
@@ -352,6 +489,18 @@ with col2:
         medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
         st.write(f"{medal} **{row['정비자소속']}**")
         st.write(f"   AS 건수: {row['AS건수']:,}건 (총 {row['총수리비']:,.0f}원)")
+
+# 만족도 랭킹 추가
+if satisfaction_columns and ranking_cols == 3:
+    with cols[2]:
+        st.subheader("😊 고객 만족도 랭킹")
+        satisfaction_col = satisfaction_columns[0]
+        satisfaction_ranking = part_stats[part_stats[satisfaction_col].notna()].nlargest(10, satisfaction_col)[['정비자소속', satisfaction_col, 'AS건수']]
+        
+        for idx, (_, row) in enumerate(satisfaction_ranking.iterrows()):
+            medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
+            st.write(f"{medal} **{row['정비자소속']}**")
+            st.write(f"   만족도: {row[satisfaction_col]:.2f}점 ({row['AS건수']}건)")
 
 # 데이터 다운로드
 st.markdown("---")
@@ -370,6 +519,11 @@ with col1:
 
 with col2:
     download_columns = ['정비자소속', '관리번호', '정비일자', '수리비', '작업유형', '정비대상']
+    
+    # 만족도 컬럼도 다운로드에 포함
+    if satisfaction_columns:
+        download_columns.extend(satisfaction_columns)
+    
     available_columns = [col for col in download_columns if col in df.columns]
     detailed_data = df[available_columns].copy()
     detailed_csv = detailed_data.to_csv(index=False, encoding='utf-8-sig')
