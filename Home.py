@@ -1,9 +1,22 @@
-# main.py - 수정된 메인 페이지
 import streamlit as st
 import pandas as pd
 import numpy as np
 import os
 import warnings
+from utils.data_processing import (
+    load_data, 
+    merge_dataframes, 
+    extract_and_apply_region,
+    calculate_previous_maintenance_dates, 
+    map_employee_data, 
+    merge_repair_costs,
+    process_date_columns, 
+    preprocess_repair_costs, 
+    preprocess_maintenance_data,
+    preprocess_satisfaction_data,
+    merge_satisfaction_with_maintenance
+)
+
 warnings.filterwarnings('ignore')
 
 # 페이지 설정
@@ -17,18 +30,7 @@ st.set_page_config(
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 
-# 간단한 데이터 로드 함수 (캐싱 강화)
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_simple_data(file):
-    """빠른 데이터 로드 - 기본 기능만"""
-    try:
-        df = pd.read_excel(file, dtype=str)
-        df.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df.columns]
-        return df
-    except Exception as e:
-        st.error(f"파일 로드 오류: {e}")
-        return None
-
+# 내장 파일 로드 (간소화)
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_static_files():
     """내장 파일 로드"""
@@ -56,76 +58,9 @@ def load_static_files():
         st.sidebar.error(f"내장 데이터 로드 오류: {e}")
         return None, None
 
-# 빠른 데이터 병합 (필수 기능만) - 수정된 버전
-@st.cache_data(show_spinner=False)
-def quick_merge(df1, df2=None):
-    """빠른 병합 - 핵심 기능만"""
-    if df1 is None:
-        return None
-    
-    result = df1.copy()
-    
-    # 관리번호 문자열 변환
-    if '관리번호' in result.columns:
-        result['관리번호'] = result['관리번호'].astype(str)
-    
-    # 수리비 처리
-    if '수리비' not in result.columns:
-        result['수리비'] = 0
-    result['수리비'] = pd.to_numeric(result['수리비'], errors='coerce').fillna(0)
-    
-    # 날짜 처리
-    if '정비일자' in result.columns:
-        result['정비일자'] = pd.to_datetime(result['정비일자'], errors='coerce')
-        result['년월'] = result['정비일자'].dt.to_period('M')
-    
-    # 자산 데이터 병합 (안전하게)
-    if df2 is not None and '관리번호' in df2.columns:
-        try:
-            # 사용 가능한 컬럼만 선택
-            available_cols = ['관리번호']
-            optional_cols = ['브랜드', '모델명', '제조년도', '취득가']
-            
-            for col in optional_cols:
-                if col in df2.columns:
-                    available_cols.append(col)
-            
-            # 컬럼 매핑 처리
-            column_mappings = {
-                '제조사명': '브랜드',
-                '제조사모델명': '모델명'
-            }
-            
-            # 매핑된 컬럼명으로 변경
-            df2_temp = df2.copy()
-            for old_col, new_col in column_mappings.items():
-                if old_col in df2_temp.columns and new_col not in df2_temp.columns:
-                    df2_temp[new_col] = df2_temp[old_col]
-                    if new_col not in available_cols:
-                        available_cols.append(new_col)
-            
-            # 실제 존재하는 컬럼만 선택
-            final_cols = [col for col in available_cols if col in df2_temp.columns]
-            
-            if len(final_cols) > 1:  # 관리번호 외에 다른 컬럼이 있는 경우만
-                df2_simple = df2_temp[final_cols].drop_duplicates(subset='관리번호')
-                df2_simple['관리번호'] = df2_simple['관리번호'].astype(str)
-                result = pd.merge(result, df2_simple, on='관리번호', how='left')
-        except Exception as e:
-            st.sidebar.warning(f"자산 데이터 병합 중 오류: {e}")
-    
-    # 브랜드 정리
-    if '브랜드' in result.columns:
-        result['브랜드'] = result['브랜드'].fillna('기타')
-    else:
-        result['브랜드'] = '기타'
-    
-    return result
-
-# 사이드바 - 간소화된 업로드
+# 사이드바 - 업로드
 st.sidebar.title("📁 데이터 업로드")
 
-# 파일 업로더들
 uploaded_file1 = st.sidebar.file_uploader("**정비일지 데이터**", type=["xlsx"], key="maintenance")
 uploaded_file3 = st.sidebar.file_uploader("**소모품 출고 데이터**", type=["xlsx"], key="parts")
 uploaded_file5 = st.sidebar.file_uploader("**만족도 조사 데이터**", type=["xlsx"], key="satisfaction")
@@ -135,9 +70,6 @@ df2, df4 = load_static_files()
 
 if df2 is not None:
     st.sidebar.success("✅ 자산조회 데이터 준비됨")
-    # 자산 데이터 컬럼 확인 (디버깅용)
-    st.sidebar.write(f"자산 데이터 컬럼: {list(df2.columns)[:5]}...")
-    
 if df4 is not None:
     st.sidebar.success("✅ 조직도 데이터 준비됨")
 
@@ -145,62 +77,96 @@ if df4 is not None:
 st.title("🏭 산업장비 AS 분석 대시보드")
 st.markdown("---")
 
-# 데이터 처리 (간소화)
+# 데이터 처리
 processed_data = None
 
 if uploaded_file1 is not None:
     with st.spinner("데이터 처리 중..."):
         try:
-            # 정비일지 로드
-            df1 = load_simple_data(uploaded_file1)
+            # 1. 정비일지 로드
+            df1 = load_data(uploaded_file1)
             
             if df1 is not None:
                 st.success("✅ 정비일지 데이터 로드 완료")
-                st.write(f"정비일지 컬럼: {list(df1.columns)[:10]}...")
                 
-                # 빠른 병합
-                processed_data = quick_merge(df1, df2)
+                # 2. 기본 전처리
+                df1 = preprocess_maintenance_data(df1)
                 
-                if processed_data is not None:
-                    # 세션에 저장
-                    st.session_state.df1_with_costs = processed_data
-                    st.session_state.data_loaded = True
-                    st.success("✅ 데이터 병합 완료")
-                else:
-                    st.error("데이터 병합 실패")
+                # 3. 자산 데이터 병합
+                if df2 is not None:
+                    df1 = merge_dataframes(df1, df2)
+                
+                # 4. 소모품 데이터와 수리비 매핑
+                if uploaded_file3 is not None:
+                    df3 = load_data(uploaded_file3)
+                    if df3 is not None:
+                        st.info("🔄 수리비 매핑 중...")
+                        df3 = preprocess_repair_costs(df3)
+                        df1 = merge_repair_costs(df1, df3)
+                        
+                        # 매핑 결과 확인
+                        mapped_count = (df1['수리비'] > 0).sum() if '수리비' in df1.columns else 0
+                        mapping_rate = (mapped_count / len(df1) * 100) if len(df1) > 0 else 0
+                        st.success(f"✅ 수리비 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
+                
+                # 5. 만족도 데이터 병합
+                if uploaded_file5 is not None:
+                    df5 = load_data(uploaded_file5)
+                    if df5 is not None:
+                        st.info("😊 만족도 데이터 매핑 중...")
+                        df5 = preprocess_satisfaction_data(df5)
+                        df1 = merge_satisfaction_with_maintenance(df1, df5)
+                        
+                        # 만족도 매핑 결과
+                        satisfaction_matched = df1['만족도_평균'].notna().sum() if '만족도_평균' in df1.columns else 0
+                        satisfaction_rate = (satisfaction_matched / len(df1) * 100) if len(df1) > 0 else 0
+                        st.success(f"✅ 만족도 매핑 완료: {satisfaction_matched}건 ({satisfaction_rate:.1f}%)")
+                
+                # 6. 추가 처리
+                df1 = calculate_previous_maintenance_dates(df1)
+                df1 = extract_and_apply_region(df1)
+                df1 = process_date_columns(df1)
+                
+                # 7. 조직도 매핑
+                if df4 is not None:
+                    df1 = map_employee_data(df1, df4)
+                
+                # 8. 세션에 저장
+                processed_data = df1
+                st.session_state.df1_with_costs = processed_data
+                st.session_state.data_loaded = True
+                
+                st.success("✅ 모든 데이터 처리 완료")
+                
             else:
                 st.error("정비일지 데이터 로드 실패")
                 
         except Exception as e:
             st.error(f"데이터 처리 중 오류 발생: {e}")
-            st.write("오류 상세:")
             st.exception(e)
 
-# 소모품 데이터 처리 (선택적)
-if uploaded_file3 is not None:
+# 추가 데이터 저장 (개별 접근용)
+if uploaded_file3 is not None and 'df3' not in st.session_state:
     try:
-        df3 = load_simple_data(uploaded_file3)
+        df3 = load_data(uploaded_file3)
         if df3 is not None:
             st.session_state.df3 = df3
-            st.success("✅ 소모품 출고 데이터 로드 완료")
-    except Exception as e:
-        st.warning(f"소모품 데이터 처리 중 오류: {e}")
+    except:
+        pass
 
-# 만족도 데이터 처리 (선택적)  
-if uploaded_file5 is not None:
+if uploaded_file5 is not None and 'df5' not in st.session_state:
     try:
-        df5 = load_simple_data(uploaded_file5)
+        df5 = load_data(uploaded_file5)
         if df5 is not None:
             st.session_state.df5 = df5
-            st.success("✅ 만족도 조사 데이터 로드 완료")
-    except Exception as e:
-        st.warning(f"만족도 데이터 처리 중 오류: {e}")
+    except:
+        pass
 
 # 데이터 현황 표시
 if st.session_state.data_loaded and processed_data is not None:
     st.header("📊 데이터 현황")
     
-    # 기본 통계 (빠른 계산)
+    # 기본 통계
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -233,7 +199,7 @@ if st.session_state.data_loaded and processed_data is not None:
     # 간단한 미리보기
     st.subheader("🔍 데이터 미리보기")
     
-    # 컬럼 선택 (주요 컬럼만)
+    # 주요 컬럼만 표시
     display_columns = []
     for col in ['관리번호', '정비일자', '정비자', '브랜드', '모델명', '수리비', '작업유형']:
         if col in processed_data.columns:
@@ -260,7 +226,7 @@ if st.session_state.data_loaded and processed_data is not None:
                 st.write(f"• {brand}: {count}건 ({percentage:.1f}%)")
     
     with col2:
-        # 월별 건수 (간단히)
+        # 월별 건수
         if '년월' in processed_data.columns:
             monthly_counts = processed_data['년월'].value_counts().sort_index().tail(6)
             st.write("**📅 최근 6개월 건수**")
@@ -281,15 +247,7 @@ if st.session_state.data_loaded and processed_data is not None:
                 st.write(f"• {col}: {completeness:.1f}%")
     
     with col2:
-        st.write("**브랜드 매핑 정보**")
-        if '브랜드' in processed_data.columns:
-            brand_mapped = (processed_data['브랜드'] != '기타').sum()
-            mapping_rate = (brand_mapped / len(processed_data) * 100)
-            st.write(f"• 매핑 건수: {brand_mapped:,}건")
-            st.write(f"• 매핑률: {mapping_rate:.1f}%")
-    
-    with col3:
-        st.write("**수리비 정보**")
+        st.write("**수리비 매핑 정보**")
         if '수리비' in processed_data.columns:
             cost_records = (processed_data['수리비'] > 0).sum()
             cost_rate = (cost_records / len(processed_data) * 100)
@@ -299,6 +257,20 @@ if st.session_state.data_loaded and processed_data is not None:
             if cost_records > 0:
                 avg_cost = processed_data[processed_data['수리비'] > 0]['수리비'].mean()
                 st.write(f"• 평균 수리비: {avg_cost:,.0f}원")
+    
+    with col3:
+        st.write("**만족도 정보**")
+        if '만족도_평균' in processed_data.columns:
+            satisfaction_records = processed_data['만족도_평균'].notna().sum()
+            satisfaction_rate = (satisfaction_records / len(processed_data) * 100)
+            st.write(f"• 만족도 조사 건수: {satisfaction_records:,}건")
+            st.write(f"• 만족도 조사율: {satisfaction_rate:.1f}%")
+            
+            if satisfaction_records > 0:
+                avg_satisfaction = processed_data['만족도_평균'].mean()
+                st.write(f"• 평균 만족도: {avg_satisfaction:.2f}점")
+        else:
+            st.write("• 만족도 데이터 없음")
 
 else:
     # 데이터가 없을 때 안내
@@ -337,20 +309,48 @@ with col1:
     st.info("💡 **Tip**: 정비일지 데이터만으로도 기본 분석이 가능합니다.")
 
 with col2:
-    st.info("🔄 **업데이트**: 데이터는 자동으로 캐시되어 빠르게 로드됩니다.")
+    st.info("🔄 **업데이트**: 소모품 출고 데이터를 함께 업로드하면 수리비가 자동 매핑됩니다.")
 
 with col3:
-    st.info("📱 **모바일**: 반응형 디자인으로 모든 기기에서 사용 가능합니다.")
+    st.info("😊 **만족도**: 만족도 조사 데이터도 함께 분석 가능합니다.")
 
-# 디버깅 정보 (개발용)
-if st.sidebar.checkbox("디버깅 정보 표시"):
+# 고급 설정 (사이드바)
+st.sidebar.markdown("---")
+st.sidebar.header("🔧 고급 설정")
+
+if st.sidebar.checkbox("매핑 상태 상세 보기") and st.session_state.data_loaded:
+    st.sidebar.subheader("🔍 매핑 상태 분석")
+    
+    if 'df1_with_costs' in st.session_state:
+        data = st.session_state.df1_with_costs
+        
+        # 수리비 매핑 상태
+        if '수리비' in data.columns:
+            cost_mapped = (data['수리비'] > 0).sum()
+            cost_rate = (cost_mapped / len(data) * 100)
+            st.sidebar.write(f"**수리비 매핑**: {cost_mapped}/{len(data)}건 ({cost_rate:.1f}%)")
+        
+        # 만족도 매핑 상태
+        if '만족도_평균' in data.columns:
+            satisfaction_mapped = data['만족도_평균'].notna().sum()
+            satisfaction_rate = (satisfaction_mapped / len(data) * 100)
+            st.sidebar.write(f"**만족도 매핑**: {satisfaction_mapped}/{len(data)}건 ({satisfaction_rate:.1f}%)")
+        
+        # 조직도 매핑 상태
+        if '정비자소속' in data.columns:
+            org_mapped = data['정비자소속'].notna().sum()
+            org_rate = (org_mapped / len(data) * 100)
+            st.sidebar.write(f"**조직도 매핑**: {org_mapped}/{len(data)}건 ({org_rate:.1f}%)")
+
+# 디버깅 정보
+if st.sidebar.checkbox("디버깅 정보"):
     st.sidebar.write("**세션 상태:**")
     st.sidebar.write(f"data_loaded: {st.session_state.data_loaded}")
     
     if df2 is not None:
         st.sidebar.write("**자산 데이터 컬럼:**")
-        st.sidebar.write(list(df2.columns))
+        st.sidebar.write(list(df2.columns)[:5])
     
     if 'df1_with_costs' in st.session_state:
         st.sidebar.write("**처리된 데이터 컬럼:**")
-        st.sidebar.write(list(st.session_state.df1_with_costs.columns))
+        st.sidebar.write(list(st.session_state.df1_with_costs.columns)[:10])
