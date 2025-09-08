@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import os
 import warnings
+import re
+from difflib import get_close_matches
 warnings.filterwarnings('ignore')
 
 # 페이지 설정
@@ -99,10 +101,10 @@ def load_static_data():
     
     return df2, df4
 
-# 초간단 머지 함수 - 디버깅 강화
+# 초간단 머지 함수 - 완전 수정된 버전
 @st.cache_data
 def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
-    """모든 데이터를 df1에 머지 - 디버깅 강화"""
+    """모든 데이터를 df1에 머지 - 완전 수정된 버전"""
     
     result = df1.copy()
     
@@ -179,122 +181,120 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             result['수리비'] = 0
     
     # 4. 조직도 데이터로 소속 매핑 (df4) - 완전 수정된 버전
-if df4 is not None:
-    st.write("### 🔍 조직도 매핑 디버깅")
-    
-    # 조직도 데이터 정리
-    df4_clean = df4.copy()
-    
-    # 문자열 정리
-    for col in ['이름', '파트']:
-        if col in df4_clean.columns:
-            df4_clean[col] = df4_clean[col].astype(str).str.strip()
-            df4_clean[col] = df4_clean[col].replace(['nan', 'NaN', ''], np.nan)
-    
-    # NaN 제거
-    df4_clean = df4_clean.dropna(subset=['이름', '파트'])
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write("**📋 정비일지 정비자:**")
-        if '정비자' in result.columns:
-            # 정비자 데이터 정리
-            result['정비자_clean'] = result['정비자'].astype(str).str.strip()
-            result['정비자_clean'] = result['정비자_clean'].replace(['nan', 'NaN', ''], np.nan)
-            
-            workers = result['정비자_clean'].dropna().value_counts().head(10)
-            st.write(f"• 총 정비자 수: {len(workers)}명")
-            st.write("• 상위 10명:")
-            for worker, count in workers.items():
-                st.write(f"  - '{worker}': {count}건")
-    
-    with col2:
-        st.write("**👥 조직도 정보:**")
-        st.write(f"• 조직도 레코드: {len(df4_clean)}건")
-        st.write("• 조직도 이름 샘플:")
-        for name in df4_clean['이름'].head(10):
-            st.write(f"  - '{name}'")
-    
-    try:
-        if '정비자' in result.columns and '이름' in df4_clean.columns and '파트' in df4_clean.columns:
-            
-            # 매핑 전 공통 이름 확인
-            workers_set = set(result['정비자_clean'].dropna().unique())
-            org_set = set(df4_clean['이름'].unique())
-            common_names = workers_set & org_set
-            
-            st.write(f"**정확한 공통 이름: {len(common_names)}개**")
-            if common_names:
-                st.write("공통 이름들:")
-                for name in list(common_names)[:10]:
-                    st.write(f"  - '{name}'")
-            
-            # 1차: 정확한 매칭
-            org_mapping = df4_clean[['이름', '파트']].set_index('이름')['파트'].to_dict()
-            
-            def map_to_part(worker_name):
-                if pd.isna(worker_name):
-                    return np.nan
-                return org_mapping.get(worker_name, np.nan)
-            
-            result['정비자소속'] = result['정비자_clean'].apply(map_to_part)
-            
-            # 2차: 부분 매칭 (정확한 매칭이 안 된 경우)
-            unmapped_mask = result['정비자소속'].isna()
-            unmapped_workers = result.loc[unmapped_mask, '정비자_clean'].dropna().unique()
-            
-            if len(unmapped_workers) > 0:
-                st.write(f"**부분 매칭 시도: {len(unmapped_workers)}명**")
-                
-                from difflib import get_close_matches
-                
-                partial_mapping = {}
-                for worker in unmapped_workers:
-                    matches = get_close_matches(worker, list(org_set), n=1, cutoff=0.8)
-                    if matches:
-                        matched_name = matches[0]
-                        partial_mapping[worker] = org_mapping[matched_name]
-                        st.write(f"  - '{worker}' → '{matched_name}' ({org_mapping[matched_name]})")
-                
-                # 부분 매칭 결과 적용
-                for worker, part in partial_mapping.items():
-                    result.loc[result['정비자_clean'] == worker, '정비자소속'] = part
-            
-            # 매핑 결과 확인
-            mapped_count = result['정비자소속'].notna().sum()
-            mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
-            
-            st.success(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
-            
-            # 매핑되지 않은 것들은 정비자명 사용
-            unmapped_mask = result['정비자소속'].isna()
-            if unmapped_mask.any():
-                result.loc[unmapped_mask, '정비자소속'] = result.loc[unmapped_mask, '정비자_clean']
-                st.info(f"매핑되지 않은 {unmapped_mask.sum()}건은 정비자명을 파트명으로 사용")
-            
-            # 임시 컬럼 제거
-            if '정비자_clean' in result.columns:
-                result = result.drop('정비자_clean', axis=1)
-            
-            # 최종 파트 현황
-            st.write("**📊 최종 파트 현황:**")
-            part_counts = result['정비자소속'].value_counts().head(10)
-            for part, count in part_counts.items():
-                st.write(f"  - {part}: {count}건")
+    if df4 is not None:
+        st.write("### 🔍 조직도 매핑 디버깅")
         
-        else:
-            st.error("필요한 컬럼이 없습니다!")
-            result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+        # 조직도 데이터 정리
+        df4_clean = df4.copy()
+        
+        # 문자열 정리
+        for col in ['이름', '파트']:
+            if col in df4_clean.columns:
+                df4_clean[col] = df4_clean[col].astype(str).str.strip()
+                df4_clean[col] = df4_clean[col].replace(['nan', 'NaN', ''], np.nan)
+        
+        # NaN 제거
+        df4_clean = df4_clean.dropna(subset=['이름', '파트'])
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**📋 정비일지 정비자:**")
+            if '정비자' in result.columns:
+                # 정비자 데이터 정리
+                result['정비자_clean'] = result['정비자'].astype(str).str.strip()
+                result['정비자_clean'] = result['정비자_clean'].replace(['nan', 'NaN', ''], np.nan)
+                
+                workers = result['정비자_clean'].dropna().value_counts().head(10)
+                st.write(f"• 총 정비자 수: {len(workers)}명")
+                st.write("• 상위 10명:")
+                for worker, count in workers.items():
+                    st.write(f"  - '{worker}': {count}건")
+        
+        with col2:
+            st.write("**👥 조직도 정보:**")
+            st.write(f"• 조직도 레코드: {len(df4_clean)}건")
+            st.write("• 조직도 이름 샘플:")
+            for name in df4_clean['이름'].head(10):
+                st.write(f"  - '{name}'")
+        
+        try:
+            if '정비자' in result.columns and '이름' in df4_clean.columns and '파트' in df4_clean.columns:
+                
+                # 매핑 전 공통 이름 확인
+                workers_set = set(result['정비자_clean'].dropna().unique())
+                org_set = set(df4_clean['이름'].unique())
+                common_names = workers_set & org_set
+                
+                st.write(f"**정확한 공통 이름: {len(common_names)}개**")
+                if common_names:
+                    st.write("공통 이름들:")
+                    for name in list(common_names)[:10]:
+                        st.write(f"  - '{name}'")
+                
+                # 1차: 정확한 매칭
+                org_mapping = df4_clean[['이름', '파트']].set_index('이름')['파트'].to_dict()
+                
+                def map_to_part(worker_name):
+                    if pd.isna(worker_name):
+                        return np.nan
+                    return org_mapping.get(worker_name, np.nan)
+                
+                result['정비자소속'] = result['정비자_clean'].apply(map_to_part)
+                
+                # 2차: 부분 매칭 (정확한 매칭이 안 된 경우)
+                unmapped_mask = result['정비자소속'].isna()
+                unmapped_workers = result.loc[unmapped_mask, '정비자_clean'].dropna().unique()
+                
+                if len(unmapped_workers) > 0:
+                    st.write(f"**부분 매칭 시도: {len(unmapped_workers)}명**")
+                    
+                    partial_mapping = {}
+                    for worker in unmapped_workers:
+                        matches = get_close_matches(worker, list(org_set), n=1, cutoff=0.8)
+                        if matches:
+                            matched_name = matches[0]
+                            partial_mapping[worker] = org_mapping[matched_name]
+                            st.write(f"  - '{worker}' → '{matched_name}' ({org_mapping[matched_name]})")
+                    
+                    # 부분 매칭 결과 적용
+                    for worker, part in partial_mapping.items():
+                        result.loc[result['정비자_clean'] == worker, '정비자소속'] = part
+                
+                # 매핑 결과 확인
+                mapped_count = result['정비자소속'].notna().sum()
+                mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
+                
+                st.success(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
+                
+                # 매핑되지 않은 것들은 정비자명 사용
+                unmapped_mask = result['정비자소속'].isna()
+                if unmapped_mask.any():
+                    result.loc[unmapped_mask, '정비자소속'] = result.loc[unmapped_mask, '정비자_clean']
+                    st.info(f"매핑되지 않은 {unmapped_mask.sum()}건은 정비자명을 파트명으로 사용")
+                
+                # 임시 컬럼 제거
+                if '정비자_clean' in result.columns:
+                    result = result.drop('정비자_clean', axis=1)
+                
+                # 최종 파트 현황
+                st.write("**📊 최종 파트 현황:**")
+                part_counts = result['정비자소속'].value_counts().head(10)
+                for part, count in part_counts.items():
+                    st.write(f"  - {part}: {count}건")
             
-    except Exception as e:
-        st.error(f"조직도 매핑 실패: {e}")
-        st.exception(e)
+            else:
+                st.error("필요한 컬럼이 없습니다!")
+                result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+                
+        except Exception as e:
+            st.error(f"조직도 매핑 실패: {e}")
+            st.exception(e)
+            result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
+    
+    # 정비자소속이 없으면 기본값 설정
+    if '정비자소속' not in result.columns:
         result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
-
-# 정비자소속이 없으면 기본값 설정
-if '정비자소속' not in result.columns:
-    result['정비자소속'] = result['정비자'] if '정비자' in result.columns else '미분류'
     
     # 5. 만족도 데이터 간단 매핑 (df5)
     if df5 is not None and '관리번호' in df5.columns:
@@ -496,6 +496,3 @@ if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 �
                 st.warning("매핑률이 80% 미만입니다.")
             else:
                 st.success("매핑률이 양호합니다.")
-
-
-
