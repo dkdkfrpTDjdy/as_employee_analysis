@@ -1,5 +1,6 @@
 # 4. pages/04_월별_종합_분석.py 전체 코드
 import streamlit as st
+import calendar
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -54,8 +55,8 @@ if len(available_years) == 0 or len(available_months) == 0:
     st.stop()
 
 selected_year = st.sidebar.selectbox("분석 년도", available_years)
-selected_month = st.sidebar.selectbox("분석 월", available_months, 
-                                     format_func=lambda x: f"{x}월 ({calendar.month_name[x]})")
+selected_month = st.sidebar.selectbox("분석 월", available_months,
+                                    format_func=lambda x: f"{int(x)}월 ({calendar.month_name[int(x)] if pd.notna(x) and 1 <= int(x) <= 12 else 'Unknown'})")
 
 # 장비 구분
 equipment_filter = st.sidebar.selectbox("장비 구분", ["전체", "지게차", "AWP", "기타"])
@@ -1020,3 +1021,4 @@ with col3:
             file_name=f"{selected_year}년{selected_month}월_업체별요약.csv",
             mime="text/csv"
         )
+
