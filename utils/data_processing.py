@@ -5,57 +5,205 @@ from collections import Counter
 import traceback
 import datetime
 import re
+import logging
+from difflib import SequenceMatcher
 
-@st.cache_data
+# 로깅 설정
+def setup_logging():
+    """로깅 설정"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
+
+# 설정 관리 클래스
+class DataProcessingConfig:
+    """데이터 처리 설정 클래스"""
+    
+    # 날짜 매칭 윈도우
+    DATE_WINDOW_MAIN = 7
+    DATE_WINDOW_EXTENDED = 30
+    
+    # 유사도 임계값
+    SIMILARITY_THRESHOLD = 0.6
+    
+    # 캐시 설정
+    CACHE_TTL = 3600
+    
+    # 컬럼 매핑
+    COLUMN_MAPPINGS = {
+        '대분류': '작업유형',
+        '중분류': '정비대상', 
+        '소분류': '정비작업',
+        '제조사명': '브랜드',
+        '제조사모델명': '모델명'
+    }
+    
+    # 키워드 룰 확장
+    KEYWORD_RULES = [
+        (['타이어','d/w','고무','휠'], ['타이어','d/w','고무','휠']),
+        (['충전','전압','탭','f6-2'], ['충전','충전기','탭']),
+        (['레드빔','전조등','후미등','램프','등화'], ['등','램프','레드빔','전조','후미']),
+        (['유압','호스','누유','틸트'], ['유압','호스','틸트']),
+        (['냉각','팬','펜','a0-5'], ['냉각','팬']),
+        (['브레이크','리턴'], ['브레이크']),
+        (['에어','필터','크리너'], ['에어','필터','크리너']),
+        (['래치','켓치','손잡이'], ['래치','켓치','손잡이']),
+        (['구동','모터','전후진'], ['구동','모터']),
+        (['배선','단선','단락','can통신'], ['배선','선','케이블']),
+    ]
+
+@st.cache_data(ttl=DataProcessingConfig.CACHE_TTL)
 def load_data(file):
-    """파일에서 데이터를 로드하는 함수"""
+    """파일에서 데이터를 로드하는 함수 - 개선된 버전"""
     try:
-        # 모든 문자열 컬럼을 문자열로 로드하도록 설정
+        logger.info(f"파일 로드 시작: {file.name}")
+        
+        # 첫 번째 시도: 모든 컬럼을 문자열로 로드
         df = pd.read_excel(file, dtype=str)
-
-        # 컬럼명 정리 (줄바꿈 제거 및 공백 제거)
-        df.columns = [str(col).strip().replace('\n', '') for col in df.columns]
-
-        # 관리번호가 있으면 문자열로 강제 변환
+        
+        # 컬럼명 정리
+        df.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df.columns]
+        
+        # 빈 문자열을 NaN으로 변환
+        df = df.replace('', np.nan)
+        
+        # 관리번호 처리 (앞의 0이 사라지는 것 방지)
         if '관리번호' in df.columns:
-            df['관리번호'] = df['관리번호'].astype(str)
-
-        # 숫자형 데이터 변환 (금액, 시간 등)
-        numeric_cols = []
+            df['관리번호'] = df['관리번호'].astype(str).str.strip()
+        
+        # 숫자형 컬럼 자동 감지 및 변환
+        numeric_keywords = ['금액', '시간', '비용', '단가', '수량', '가격', '점수']
         for col in df.columns:
-            if any(keyword in col.lower() for keyword in ['금액', '시간', '비용', '단가']):
-                numeric_cols.append(col)
+            if any(keyword in col.lower() for keyword in numeric_keywords):
+                # 쉼표 제거 후 숫자 변환
+                df[col] = df[col].astype(str).str.replace(',', '').str.replace('원', '')
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # 숫자형 컬럼 변환
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # 날짜형 데이터 변환
-        date_cols = []
+        # 날짜형 컬럼 자동 감지 및 변환
+        date_keywords = ['일자', '날짜', 'date', '시간', '시각']
         for col in df.columns:
-            if any(keyword in col.lower() for keyword in ['일자', '날짜', 'date']):
-                date_cols.append(col)
+            if any(keyword in col.lower() for keyword in date_keywords):
+                # 다양한 날짜 형식 처리
+                df[col] = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True)
         
-        # 날짜형 컬럼 변환
-        for col in date_cols:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-        
-        # 컬럼명 매핑 (정비일지 데이터인 경우)
-        try:
-            # 대분류, 중분류, 소분류가 있는 경우 작업유형, 정비대상, 정비작업으로 변환
-            if all(col in df.columns for col in ['대분류', '중분류', '소분류']):
-                df.rename(columns={
-                    '대분류': '작업유형',
-                    '중분류': '정비대상',
-                    '소분류': '정비작업'
-                }, inplace=True)
-        except Exception as e:
-            st.warning(f"일부 데이터 전처리 중 오류가 발생했습니다: {e}")
-
+        logger.info(f"파일 로드 완료: {len(df)}행, {len(df.columns)}컬럼")
         return df
+        
     except Exception as e:
+        logger.error(f"파일 로드 오류: {e}")
         st.error(f"파일 로드 오류: {e}")
         return None
+
+def validate_data_quality(df, data_type="데이터"):
+    """데이터 품질 검증 및 리포트"""
+    if df is None or df.empty:
+        st.error(f"{data_type}가 비어있습니다.")
+        return False
+    
+    st.write(f"### {data_type} 품질 리포트")
+    
+    # 기본 정보
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("총 행 수", len(df))
+    with col2:
+        st.metric("총 컬럼 수", len(df.columns))
+    with col3:
+        st.metric("메모리 사용량", f"{df.memory_usage(deep=True).sum() / 1024**2:.1f} MB")
+    
+    # 결측값 분석
+    missing_data = df.isnull().sum()
+    if missing_data.sum() > 0:
+        st.write("**결측값 현황:**")
+        missing_df = pd.DataFrame({
+            '컬럼명': missing_data.index,
+            '결측값 수': missing_data.values,
+            '결측률(%)': (missing_data.values / len(df) * 100).round(1)
+        })
+        missing_df = missing_df[missing_df['결측값 수'] > 0].sort_values('결측률(%)', ascending=False)
+        st.dataframe(missing_df, use_container_width=True)
+    
+    # 중복값 확인
+    duplicates = df.duplicated().sum()
+    if duplicates > 0:
+        st.warning(f"중복된 행: {duplicates}개")
+    
+    return True
+
+def safe_merge_operation(df1, df2, merge_func, operation_name):
+    """안전한 병합 작업을 위한 래퍼 함수"""
+    try:
+        if df1 is None:
+            st.warning(f"{operation_name}: 첫 번째 데이터프레임이 None입니다.")
+            return None
+        if df2 is None:
+            st.warning(f"{operation_name}: 두 번째 데이터프레임이 None입니다.")
+            return df1
+        
+        logger.info(f"{operation_name} 시작")
+        result = merge_func(df1, df2)
+        logger.info(f"{operation_name} 완료")
+        st.success(f"{operation_name} 완료")
+        return result
+        
+    except Exception as e:
+        logger.error(f"{operation_name} 중 오류 발생: {str(e)}")
+        st.error(f"{operation_name} 중 오류 발생: {str(e)}")
+        return df1
+
+def analyze_matching_quality(result_df):
+    """매칭 품질 분석 및 시각화"""
+    if '수리비' not in result_df.columns:
+        return
+    
+    st.subheader("매칭 품질 분석")
+    
+    matched = result_df[result_df['수리비'] > 0]
+    
+    if matched.empty:
+        st.warning("매칭된 데이터가 없습니다.")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 신뢰도 분포
+        if '매칭신뢰도' in matched.columns:
+            st.write("**매칭 신뢰도 분포**")
+            reliability_counts = pd.cut(matched['매칭신뢰도'], 
+                                      bins=[0, 3, 5, 7, 10, float('inf')], 
+                                      labels=['낮음(0-3)', '보통(3-5)', '높음(5-7)', '매우높음(7-10)', '최고(10+)']).value_counts()
+            st.bar_chart(reliability_counts)
+    
+    with col2:
+        # 수리비 분포
+        st.write("**수리비 분포**")
+        cost_ranges = pd.cut(matched['수리비'], 
+                           bins=[0, 50000, 100000, 200000, 500000, float('inf')],
+                           labels=['~5만원', '5-10만원', '10-20만원', '20-50만원', '50만원+']).value_counts()
+        st.bar_chart(cost_ranges)
+    
+    # 통계 요약
+    st.write("**매칭 통계 요약**")
+    stats_df = pd.DataFrame({
+        '지표': ['총 건수', '매칭 건수', '매칭률(%)', '평균 신뢰도', '평균 수리비(원)', '고신뢰도 비율(%)'],
+        '값': [
+            len(result_df),
+            len(matched),
+            f"{len(matched)/len(result_df)*100:.1f}",
+            f"{matched['매칭신뢰도'].mean():.2f}" if '매칭신뢰도' in matched.columns else 'N/A',
+            f"{matched['수리비'].mean():,.0f}",
+            f"{(matched['매칭신뢰도'] >= 7).sum()/len(matched)*100:.1f}" if '매칭신뢰도' in matched.columns else 'N/A'
+        ]
+    })
+    st.dataframe(stats_df, use_container_width=True)
 
 def extract_region_from_address(address):
     """주소에서 지역 정보를 정확하게 추출하는 함수"""
@@ -137,6 +285,8 @@ def map_employee_data(df, org_df):
         return df
 
     try:
+        logger.info("직원 데이터 매핑 시작")
+        
         # 결과 데이터프레임 복사
         result_df = df.copy()
         org_temp = org_df.copy()
@@ -182,9 +332,11 @@ def map_employee_data(df, org_df):
             if '이름' in result_df.columns:
                 result_df.drop('이름', axis=1, inplace=True)
 
+        logger.info("직원 데이터 매핑 완료")
         return result_df
 
     except Exception as e:
+        logger.error(f"직원 데이터 매핑 중 오류 발생: {str(e)}")
         st.error(f"직원 데이터 매핑 중 오류 발생: {str(e)}")
         return df
 
@@ -196,9 +348,18 @@ def merge_dataframes(df1, df2):
         return df1
 
     try:
+        logger.info(f"데이터프레임 병합 시작: df1={len(df1)}행, df2={len(df2)}행")
+        
         # 데이터 복사
         df1_copy = df1.copy()
         df2_copy = df2.copy()
+        
+        # 컬럼명 매핑 적용
+        for old_col, new_col in DataProcessingConfig.COLUMN_MAPPINGS.items():
+            if old_col in df1_copy.columns:
+                df1_copy.rename(columns={old_col: new_col}, inplace=True)
+            if old_col in df2_copy.columns:
+                df2_copy.rename(columns={old_col: new_col}, inplace=True)
         
         # 데이터 타입 통일 - 관리번호를 문자열로 변환
         df1_copy['관리번호'] = df1_copy['관리번호'].astype(str)
@@ -210,13 +371,13 @@ def merge_dataframes(df1, df2):
             df2_copy = df2_copy.drop_duplicates(subset='관리번호')
             
         # 자산 데이터에서 필요한 컬럼만 선택
-        df2_subset = df2_copy[['관리번호', '제조사명', '제조사모델명', '제조년도', '취득가', '자재내역']]
+        available_cols = ['관리번호']
+        optional_cols = ['브랜드', '모델명', '제조년도', '취득가', '자재내역']
+        for col in optional_cols:
+            if col in df2_copy.columns:
+                available_cols.append(col)
         
-        # 컬럼명 표준화: 제조사명 -> 브랜드, 제조사모델명 -> 모델명
-        df2_subset = df2_subset.rename(columns={
-            '제조사명': '브랜드',
-            '제조사모델명': '모델명'
-        })
+        df2_subset = df2_copy[available_cols]
         
         # 관리번호 컬럼을 기준으로 왼쪽 조인으로 병합 (AS 데이터는 모두 유지)
         merged_df = pd.merge(df1_copy, df2_subset, on='관리번호', how='left')
@@ -282,87 +443,198 @@ def merge_dataframes(df1, df2):
                                             merged_df.loc[mask, '정비대상'].astype(str) + '_' + 
                                             merged_df.loc[mask, '정비작업'].astype(str))
 
+        logger.info(f"데이터프레임 병합 완료: 결과={len(merged_df)}행")
         return merged_df
+        
     except Exception as e:
+        logger.error(f"데이터 병합 중 오류 발생: {e}")
         st.error(f"데이터 병합 중 오류 발생: {e}")
         st.error(traceback.format_exc())
         return df1
 
 @st.cache_data
-def merge_repair_costs(maintenance_df, parts_df):
-    """
-    AS 데이터와 소모품 데이터를 병합하여 수리비와 사용부품을 계산합니다.
-    조건:
-    - 관리번호 일치
-    - 정비자번호 == 출고자
-    - 정비일자와 출고일자 간 차이가 ±30일 이내
-    """
+def merge_repair_costs(maintenance_df, parts_df, 
+                      day_window_main=DataProcessingConfig.DATE_WINDOW_MAIN, 
+                      day_window_ext=DataProcessingConfig.DATE_WINDOW_EXTENDED):
+    """고도화된 수리비 매칭 함수"""
+    
     if maintenance_df is None or parts_df is None:
         return maintenance_df
 
-    try:
-        df1 = maintenance_df.copy()
-        df3 = parts_df.copy()
+    logger.info(f"수리비 매칭 시작: 정비={len(maintenance_df)}건, 부품={len(parts_df)}건")
+    
+    dfm = maintenance_df.copy()
+    dfp = parts_df.copy()
 
-        # 필수 컬럼 확인
-        required_cols_df1 = ['관리번호', '정비일자', '정비자']
-        required_cols_df3 = ['관리번호', '출고일자', '기사명', '출고금액', '자재명']
-        for col in required_cols_df1 + required_cols_df3:
-            if col not in (df1.columns if col in required_cols_df1 else df3.columns):
-                st.warning(f"필수 컬럼 누락: '{col}'")
-                return df1
+    # ---------- 1) 컬럼/타입 정리 ----------
+    # 정비(AS)
+    for c in ['관리번호','정비일자','최근정비일자','최근출고일자','정비자','모델명','증상','정비번호']:
+        if c not in dfm.columns: dfm[c] = np.nan
+    dfm['관리번호'] = dfm['관리번호'].astype(str).str.strip()
+    for dc in ['정비일자','최근정비일자','최근출고일자']:
+        dfm[dc] = pd.to_datetime(dfm[dc], errors='coerce')
+    dfm['정비자'] = dfm['정비자'].fillna('').astype(str).str.strip()
+    dfm['모델명'] = dfm['모델명'].fillna('').astype(str).str.strip()
+    dfm['증상']   = dfm['증상'].fillna('').astype(str)
 
-        # 타입 정리
-        df1['관리번호'] = df1['관리번호'].astype(str)
-        df1['정비일자'] = pd.to_datetime(df1['정비일자'], errors='coerce')
-        df1['정비자'] = df1['정비자'].fillna("")
+    # 출고(부품)
+    for c in ['관리번호','출고일자','기사명','출고자','출고금액','자재명','출고번호','순번','모델명','이동유형','이동유형명']:
+        if c not in dfp.columns: dfp[c] = np.nan
+    dfp['관리번호'] = dfp['관리번호'].fillna('').astype(str).str.strip()
+    dfp['출고일자'] = pd.to_datetime(dfp['출고일자'], errors='coerce')
+    dfp['기사명']   = dfp['기사명'].fillna('').astype(str).str.strip()
+    dfp['출고자']   = dfp['출고자'].fillna('').astype(str).str.strip() if '출고자' in dfp.columns else ''
+    dfp['출고금액'] = pd.to_numeric(dfp['출고금액'], errors='coerce').fillna(0)
+    dfp['자재명']   = dfp['자재명'].fillna('').astype(str).str.strip()
+    dfp['출고번호'] = dfp['출고번호'].fillna('').astype(str).str.strip()
+    dfp['순번']     = dfp['순번'].fillna('').astype(str).str.strip()
+    dfp['모델명']   = dfp['모델명'].fillna('').astype(str).str.strip()
+    dfp['이동유형'] = dfp['이동유형'].fillna('').astype(str).str.strip()
+    dfp['이동유형명']= dfp['이동유형명'].fillna('').astype(str).str.strip()
 
-        df3['관리번호'] = df3['관리번호'].astype(str)
-        df3['출고일자'] = pd.to_datetime(df3['출고일자'], errors='coerce')
-        df3['기사명'] = df3['기사명'].fillna("")
-        df3['자재명'] = df3['자재명'].fillna("")
-        df3['출고금액'] = pd.to_numeric(df3['출고금액'], errors='coerce').fillna(0)
+    # 기준일자(정비일자 > 최근정비일자 > 최근출고일자)
+    dfm['기준일자'] = dfm['정비일자']
+    dfm.loc[dfm['기준일자'].isna(), '기준일자'] = dfm['최근정비일자']
+    dfm.loc[dfm['기준일자'].isna(), '기준일자'] = dfm['최근출고일자']
 
-        # 인덱스를 저장
-        df1['원본인덱스'] = df1.index
+    dfm = dfm[~dfm['기준일자'].isna()].copy()
+    dfp = dfp[~dfp['출고일자'].isna()].copy()
 
-        # 병합: 관리번호 + 정비자번호 매칭
-        merged = pd.merge(
-            df1[['관리번호', '정비일자', '정비자', '원본인덱스']],
-            df3[['관리번호', '출고일자', '기사명', '출고금액', '자재명']],
-            left_on=['관리번호', '정비자'],
-            right_on=['관리번호', '기사명'],
-            how='inner'
-        )
+    dfm['AS_ROW_ID']   = np.arange(len(dfm))
+    dfp['PART_ROW_ID'] = np.arange(len(dfp))
 
-        # 날짜 차이 필터
-        merged['일자차이'] = (merged['출고일자'] - merged['정비일자']).dt.days
-        merged = merged[merged['일자차이'].abs() <= 30]
+    # ---------- 2) 후보 생성 ----------
+    # 2-1 관리번호 정합 + 날짜 ±7
+    cand1 = dfm[['AS_ROW_ID','관리번호','기준일자','정비자','모델명','증상']].merge(
+        dfp[['PART_ROW_ID','관리번호','출고일자','기사명','출고자','출고금액','자재명','출고번호','순번','모델명','이동유형','이동유형명']],
+        on='관리번호', how='inner'
+    )
+    cand1['일자차이'] = (cand1['출고일자'] - cand1['기준일자']).dt.days
+    cand1 = cand1[cand1['일자차이'].abs() <= day_window_main]
 
-        # 수리비 집계
-        cost_summary = merged.groupby('원본인덱스')['출고금액'].sum()
-        parts_summary = merged.groupby('원본인덱스')['자재명'].agg(
-            lambda x: ', '.join(sorted(set(x.dropna())))
-        )
+    # 2-2 관리번호가 비었거나 실패한 건 대비: 모델명(정확/부분) + 날짜 ±14 (느슨)
+    left  = dfm[['AS_ROW_ID','기준일자','정비자','모델명','증상']].copy()
+    right = dfp[['PART_ROW_ID','출고일자','기사명','출고자','출고금액','자재명','출고번호','순번','모델명']].copy()
 
-        # 결과 반영
-        df1['수리비'] = df1['원본인덱스'].map(cost_summary).fillna(0)
-        df1['사용부품'] = df1['원본인덱스'].map(parts_summary).fillna("")
+    left['키'] = 0; right['키'] = 0
+    tmp = left.merge(right, on='키', how='outer')
+    tmp['일자차이'] = (tmp['출고일자'] - tmp['기준일자']).dt.days
+    tmp = tmp[tmp['일자차이'].abs() <= day_window_ext]
 
-        df1.drop('원본인덱스', axis=1, inplace=True)
+    def sim(a,b):
+        a=(a or '').lower().strip(); b=(b or '').lower().strip()
+        return SequenceMatcher(None, a, b).ratio()
 
-        # 로그 출력
-        matched = (df1['수리비'] > 0).sum()
-        st.info(f"총 {len(df1)}건 중 {matched}건 수리비 매칭됨 ({matched / len(df1) * 100:.1f}%)")
+    tmp['모델_sim'] = tmp.apply(lambda r: sim(r.get('모델명_x',''), r.get('모델명_y','')), axis=1)
+    cand2 = tmp[tmp['모델_sim'] >= DataProcessingConfig.SIMILARITY_THRESHOLD].copy()
+    cand2 = cand2.drop(columns=['키'])
 
-        return df1
+    # 통합 후보(중복 제거)
+    cand = pd.concat([
+        cand1.rename(columns={'모델명_x':'모델명_AS','모델명_y':'모델명_PART'}),
+        cand2.rename(columns={
+            '모델명_x':'모델명_AS','모델명_y':'모델명_PART'
+        })
+    ], ignore_index=True, sort=False).drop_duplicates(subset=['AS_ROW_ID','PART_ROW_ID'])
 
-    except Exception as e:
-        st.error("병합 중 오류 발생: " + str(e))
-        st.error(traceback.format_exc())
-        df1['수리비'] = 0
-        df1['사용부품'] = ""
-        return df1
+    if cand.empty:
+        out = dfm.copy()
+        out['수리비']=0; out['사용부품']=''; out['매칭신뢰도']=0.0; out['매칭근거']=''
+        st.warning("생성된 후보가 없습니다.")
+        return out
+
+    # ---------- 3) 스코어링 ----------
+    # 사람 매칭(정비자 = 기사명 or 출고자)
+    cand['정비자_기사명_일치'] = (cand['정비자'].fillna('') == cand['기사명'].fillna('')).astype(int)
+    cand['정비자_출고자_일치'] = (cand['정비자'].fillna('') == cand.get('출고자','').fillna('')).astype(int)
+
+    # 모델명 일치도
+    if '모델_sim' not in cand.columns:
+        cand['모델_sim'] = cand.apply(lambda r: sim(r.get('모델명_AS',''), r.get('모델명_PART','')), axis=1)
+
+    # 키워드 룰(증상↔자재명) - 설정에서 가져오기
+    kw_rules = DataProcessingConfig.KEYWORD_RULES
+    
+    def kw_score(symptom, partname):
+        s=(symptom or '').lower(); p=(partname or '').lower()
+        score=0
+        for left,right in kw_rules:
+            if any(k in s for k in left) and any(k in p for k in right):
+                score += 1
+        return score
+    cand['키워드점수'] = cand.apply(lambda r: kw_score(r.get('증상',''), r.get('자재명','')), axis=1)
+
+    # 관리번호 일치 플래그( cand1 은 내재적으로 일치, cand2는 비일치일 수 있음 )
+    cand['관리번호일치'] = (cand.get('관리번호', '').astype(str).str.len() > 0).astype(int)
+
+    # 총점(자유도 줄이고 날짜 근접 가산/패널티)
+    # 가중치: 관리번호 +5, 사람 +3(둘 중 하나라도 맞으면 +3, 둘 다면 +4.5), 모델 유사도*2, 키워드 +1, 날짜 패널티(abs/2)
+    cand['사람점수'] = np.maximum(cand['정비자_기사명_일치'], cand['정비자_출고자_일치'])*3 + \
+                     (cand['정비자_기사명_일치'] & cand['정비자_출고자_일치']) * 1.5
+    cand['점수'] = (
+        cand['관리번호일치']*5 +
+        cand['사람점수'] +
+        cand['모델_sim']*2 +
+        cand['키워드점수']*1 -
+        (cand['일자차이'].abs()/2.0)
+    )
+
+    # ---------- 4) 중복 방지 + 출고 묶음 합산 ----------
+    cand['출고키'] = cand['출고번호'].astype(str) + '#' + cand['순번'].astype(str)
+    cand = cand.sort_values(['점수','일자차이'], ascending=[False, True])
+
+    assigned_part = set()
+    chosen = []
+    for as_id, grp in cand.groupby('AS_ROW_ID', sort=False):
+        for _, r in grp.iterrows():
+            k = r['출고키']
+            if k not in assigned_part:
+                chosen.append(r)
+                assigned_part.add(k)
+
+    matched = pd.DataFrame(chosen)
+    if matched.empty:
+        out = dfm.copy()
+        out['수리비']=0; out['사용부품']=''; out['매칭신뢰도']=0.0; out['매칭근거']=''
+        st.warning("매칭 결과가 없습니다.")
+        return out
+
+    # 같은 AS_ROW_ID + 같은 출고번호 묶어서(여러 자재) 합계
+    agg = matched.groupby(['AS_ROW_ID','출고번호']).agg(
+        합계=('출고금액','sum'),
+        자재목록=('자재명', lambda x: ', '.join(sorted(set([t for t in x if isinstance(t,str) and t])))),
+        평균점수=('점수','mean'),
+        최고점수=('점수','max')
+    ).reset_index()
+
+    final = agg.groupby('AS_ROW_ID').agg(
+        수리비=('합계','sum'),
+        사용부품=('자재목록', lambda x: ', '.join(sorted(set(', '.join(x).split(', '))))),
+        매칭신뢰도=('평균점수','mean'),
+        최고점수=('최고점수','max'),
+        출고건수=('합계','count')
+    ).reset_index()
+
+    # 근거 텍스트
+    reason = matched.sort_values('점수', ascending=False).groupby('AS_ROW_ID').head(1).copy()
+    reason['매칭근거'] = reason.apply(
+        lambda r: f"관리번호:{'O' if r['관리번호일치'] else 'X'}, 사람매칭:{'O' if r['사람점수']>0 else 'X'}, "
+                  f"모델유사:{r['모델_sim']:.2f}, 키워드:{int(r['키워드점수'])}, 일자차이:{int(abs(r['일자차이']))}일",
+        axis=1
+    )
+    reason = reason[['AS_ROW_ID','매칭근거']]
+
+    out = dfm.merge(final, on='AS_ROW_ID', how='left').merge(reason, on='AS_ROW_ID', how='left')
+    out['수리비'] = out['수리비'].fillna(0).astype(float)
+    out['사용부품'] = out['사용부품'].fillna('')
+    out['매칭신뢰도'] = out['매칭신뢰도'].fillna(0.0)
+
+    matched_cnt = (out['수리비'] > 0).sum()
+    logger.info(f"수리비 매칭 완료: {matched_cnt}/{len(out)}건 ({matched_cnt/len(out)*100:.1f}%)")
+    st.info(f"총 {len(out)}건 중 {matched_cnt}건 수리비 매칭 ({matched_cnt/len(out)*100:.1f}%)")
+    st.caption("신뢰도=출고건 평균 점수. 관리번호/사람/모델/키워드/날짜에 의해 결정.")
+    
+    return out
 
 # 재정비 간격 계산을 위한 날짜 처리
 @st.cache_data
@@ -391,6 +663,7 @@ def process_date_columns(df):
             df_copy['30일내재정비'] = (df_copy['재정비간격'] <= 30) & (df_copy['재정비간격'] > 0)
 
     except Exception as e:
+        logger.error(f"날짜 처리 중 오류 발생: {e}")
         st.error(f"날짜 처리 중 오류 발생: {e}")
         st.error(traceback.format_exc())
     
@@ -409,8 +682,9 @@ def preprocess_repair_costs(df):
 
         # 금액 컬럼 숫자로 변환
         for col in df_copy.columns:
-            if '단가' in col or '금액' in col or '단가' in col:
+            if '단가' in col or '금액' in col:
                 df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+                
     except Exception as e:
         st.warning(f"수리비 데이터 전처리 중 오류가 발생했습니다: {e}")
     
@@ -419,6 +693,8 @@ def preprocess_repair_costs(df):
 def preprocess_maintenance_data(df):
     """정비일지 데이터 전처리 함수"""
     try:
+        logger.info("정비일지 데이터 전처리 시작")
+        
         # 컬럼명 정리 (줄바꿈, 공백 제거)
         df.columns = [str(col).strip().replace('\n', '') for col in df.columns]
         
@@ -448,9 +724,11 @@ def preprocess_maintenance_data(df):
                 # 숫자가 아닌 값을 NaN으로 변환
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         
+        logger.info("정비일지 데이터 전처리 완료")
         return df
     
     except Exception as e:
+        logger.error(f"정비일지 데이터 전처리 중 오류 발생: {e}")
         st.error(f"정비일지 데이터 전처리 중 오류 발생: {e}")
         return df
 
@@ -462,12 +740,12 @@ def generate_fault_type_column(df):
         df['고장유형'] = df['고장유형'].replace('nan_nan_nan', np.nan)
     return df
 
-# 기존 코드 맨 아래에 추가
-
 @st.cache_data
 def preprocess_satisfaction_data(df):
     """만족도 조사 데이터 전처리"""
     try:
+        logger.info("만족도 데이터 전처리 시작")
+        
         df_copy = df.copy()
         
         # 컬럼명 정리
@@ -512,9 +790,11 @@ def preprocess_satisfaction_data(df):
         if '질문' in df_copy.columns:
             df_copy['질문카테고리'] = df_copy['질문'].apply(categorize_question)
         
+        logger.info("만족도 데이터 전처리 완료")
         return df_copy
     
     except Exception as e:
+        logger.error(f"만족도 데이터 전처리 중 오류 발생: {e}")
         st.error(f"만족도 데이터 전처리 중 오류 발생: {e}")
         return df
 
@@ -525,6 +805,8 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
         return maintenance_df
     
     try:
+        logger.info("만족도 데이터 병합 시작")
+        
         df1 = maintenance_df.copy()
         df5 = satisfaction_df.copy()
         
@@ -605,13 +887,13 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
             )
             
             # 카테고리별 평균 점수
-            if ('mean',) in category_pivot.columns.levels:
+            if len(category_pivot.columns.levels) > 1 and 'mean' in category_pivot.columns.levels[0]:
                 mean_cols = category_pivot['mean']
                 mean_cols.columns = [f'만족도_{col}_평균' for col in mean_cols.columns]
                 satisfaction_stats = pd.concat([satisfaction_stats, mean_cols], axis=1)
             
             # 카테고리별 응답 수
-            if ('count',) in category_pivot.columns.levels:
+            if len(category_pivot.columns.levels) > 1 and 'count' in category_pivot.columns.levels[0]:
                 count_cols = category_pivot['count']
                 count_cols.columns = [f'만족도_{col}_응답수' for col in count_cols.columns]
                 satisfaction_stats = pd.concat([satisfaction_stats, count_cols], axis=1)
@@ -629,10 +911,13 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
         # 매핑 결과 확인
         matched_count = merged_df['만족도_평균'].notna().sum()
         total_count = len(merged_df)
+        
+        logger.info(f"만족도 매핑 완료: {matched_count}/{total_count}건")
         st.info(f"만족도 매핑 결과: {matched_count}/{total_count}건 매핑됨")
         
         return merged_df
     
     except Exception as e:
+        logger.error(f"만족도 데이터 병합 중 오류 발생: {e}")
         st.error(f"만족도 데이터 병합 중 오류 발생: {e}")
         return maintenance_df
