@@ -45,10 +45,10 @@ def load_excel_simple(file):
         st.error(f"파일 로드 오류: {e}")
         return None
 
-# 내장 데이터 로드
+# 내장 데이터 로드 - 수정된 버전
 @st.cache_data
 def load_static_data():
-    """내장 데이터 로드"""
+    """내장 데이터 로드 - 조직도 로드 방식 수정"""
     df2, df4 = None, None
     
     # 자산조회 데이터
@@ -59,15 +59,40 @@ def load_static_data():
         except:
             df2 = None
     
-    # 조직도 데이터
+    # 조직도 데이터 - 올바른 로드 방식
     if os.path.exists("data/조직도데이터.xlsx"):
         try:
-            df4 = pd.read_excel("data/조직도데이터.xlsx", dtype=str, header=None)
-            if len(df4.columns) >= 6:
-                df4.columns = ['이름', '파트', '직급', '담당', '직책', '사번']
-            else:
-                df4.columns = ['이름', '파트'] + [f'컬럼{i}' for i in range(2, len(df4.columns))]
-            df4 = df4.replace('', np.nan)
+            # 먼저 헤더 있는 상태로 로드 시도
+            df4 = pd.read_excel("data/조직도데이터.xlsx", dtype=str)
+            
+            # 첫 번째 행이 실제 헤더인지 확인
+            first_row = df4.iloc[0] if len(df4) > 0 else pd.Series()
+            
+            # 첫 번째 행에 헤더 키워드가 있으면 헤더로 사용
+            if any(keyword in str(first_row.iloc[i]).lower() 
+                   for i in range(min(len(first_row), 3)) 
+                   for keyword in ['이름', '파트', '사번', '소속']):
+                
+                # 첫 번째 행을 헤더로 설정하고 나머지를 데이터로 사용
+                new_columns = df4.iloc[0].tolist()
+                df4 = df4.iloc[1:].reset_index(drop=True)
+                df4.columns = new_columns
+                st.sidebar.info("조직도: 첫 번째 행을 헤더로 사용")
+            
+            # 컬럼명 정리
+            df4.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df4.columns]
+            
+            # 빈 문자열과 'nan' 문자열을 NaN으로 변환
+            df4 = df4.replace(['', 'nan', 'NaN'], np.nan)
+            
+            # 데이터 타입 정리
+            for col in df4.columns:
+                if col in ['이름', '파트', '직급', '담당', '직책']:
+                    df4[col] = df4[col].astype(str).str.strip()
+                    df4[col] = df4[col].replace('nan', np.nan)
+            
+            st.sidebar.success(f"✅ 조직도 로드 완료: {len(df4)}건")
+            
         except Exception as e:
             st.sidebar.error(f"조직도 로드 오류: {e}")
             df4 = None
@@ -476,4 +501,5 @@ if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 �
                 st.warning("매핑률이 80% 미만입니다.")
             else:
                 st.success("매핑률이 양호합니다.")
+
 
