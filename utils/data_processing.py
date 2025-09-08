@@ -1008,4 +1008,43 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
         st.error(f"만족도 데이터 병합 중 오류 발생: {e}")
         return maintenance_df
 
+# 문자열 정리 함수들 추가
+def clean_string_data(df, columns=None):
+    """문자열 데이터 정리 함수"""
+    df_copy = df.copy()
+    
+    if columns is None:
+        # 문자열 컬럼 자동 감지
+        columns = df_copy.select_dtypes(include=['object']).columns
+    
+    for col in columns:
+        if col in df_copy.columns:
+            # 문자열로 변환
+            df_copy[col] = df_copy[col].astype(str)
+            
+            # 공백 제거
+            df_copy[col] = df_copy[col].str.strip()
+            
+            # 'nan', 'NaN', 'None' 등을 실제 NaN으로 변환
+            df_copy[col] = df_copy[col].replace(['nan', 'NaN', 'None', 'null', ''], np.nan)
+            
+            # 연속된 공백을 하나로 변환
+            df_copy[col] = df_copy[col].str.replace(r'\s+', ' ', regex=True)
+    
+    return df_copy
+
+def normalize_names_for_matching(name):
+    """이름 매칭을 위한 정규화"""
+    if pd.isna(name) or name == 'nan':
+        return None
+    
+    name = str(name).strip()
+    
+    # 공백 제거
+    name = re.sub(r'\s+', '', name)
+    
+    # 특수문자 제거 (한글, 영문, 숫자만 유지)
+    name = re.sub(r'[^\w가-힣]', '', name)
+    
+    return name if name else None
 
