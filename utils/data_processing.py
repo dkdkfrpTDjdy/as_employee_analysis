@@ -290,9 +290,21 @@ def map_employee_data(df, org_df):
         # 결과 데이터프레임 복사
         result_df = df.copy()
         org_temp = org_df.copy()
+        
+        # 조직도 데이터 컬럼명 확인 및 정리
+        if len(org_temp.columns) >= 6:
+            # 컬럼명이 없거나 이상한 경우 표준 컬럼명 지정
+            expected_cols = ['이름', '파트', '직급', '담당', '직책', '사번']
+            if '이름' not in org_temp.columns:
+                org_temp.columns = expected_cols[:len(org_temp.columns)]
+        
+        # 조직도 데이터 확인
+        st.write("조직도 데이터 컬럼:", org_temp.columns.tolist())
+        st.write("조직도 데이터 샘플:")
+        st.dataframe(org_temp.head())
 
         # 정비일지 데이터인 경우 (정비자번호 있음)
-        if '정비자번호' in result_df.columns:
+        if '정비자번호' in result_df.columns and '사번' in org_temp.columns:
             # 조직도의 사번을 문자열로 통일
             org_temp['사번'] = org_temp['사번'].astype(str)
             # 정비자번호를 문자열로 변환
@@ -301,7 +313,7 @@ def map_employee_data(df, org_df):
             # 사번으로 매핑 (left join)
             result_df = pd.merge(
                 result_df,
-                org_temp[['사번', '파트']],
+                org_temp[['사번', '파트', '이름']],
                 left_on='정비자번호',
                 right_on='사번',
                 how='left'
@@ -313,7 +325,7 @@ def map_employee_data(df, org_df):
                 result_df.drop('사번', axis=1, inplace=True)
 
         # 수리비 데이터인 경우 (출고자 있음)
-        elif '출고자' in result_df.columns:
+        elif '출고자' in result_df.columns and '이름' in org_temp.columns:
             # 출고자와 이름을 문자열로 변환
             result_df['출고자'] = result_df['출고자'].astype(str)
             org_temp['이름'] = org_temp['이름'].astype(str)
@@ -329,7 +341,7 @@ def map_employee_data(df, org_df):
 
             # 소속 컬럼명 변경 및 중복 컬럼 제거
             result_df.rename(columns={'파트': '출고자소속'}, inplace=True)
-            if '이름' in result_df.columns:
+            if '이름' in result_df.columns and '이름' != '출고자':
                 result_df.drop('이름', axis=1, inplace=True)
 
         logger.info("직원 데이터 매핑 완료")
@@ -338,6 +350,10 @@ def map_employee_data(df, org_df):
     except Exception as e:
         logger.error(f"직원 데이터 매핑 중 오류 발생: {str(e)}")
         st.error(f"직원 데이터 매핑 중 오류 발생: {str(e)}")
+        st.write("조직도 데이터 구조:")
+        if org_df is not None:
+            st.write("컬럼:", org_df.columns.tolist())
+            st.dataframe(org_df.head())
         return df
 
 # 두 데이터프레임 병합 함수 - 브랜드 매핑 문제 해결
@@ -921,3 +937,4 @@ def merge_satisfaction_with_maintenance(maintenance_df, satisfaction_df):
         logger.error(f"만족도 데이터 병합 중 오류 발생: {e}")
         st.error(f"만족도 데이터 병합 중 오류 발생: {e}")
         return maintenance_df
+
