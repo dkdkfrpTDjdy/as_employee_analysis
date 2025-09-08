@@ -1,3 +1,4 @@
+# pages/01_경영_대시보드.py - 수정된 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -158,83 +159,135 @@ with col2:
     st.subheader("🚨 주요 이슈")
     
     # 파트별 수리비 (상위 5개)
-    if '정비자소속' in current_data.columns and not current_data.empty:
-        part_costs = current_data.groupby('정비자소속')['수리비'].sum().nlargest(5)
+    if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
+        part_costs = current_data[current_data['정비자소속'].notna()].groupby('정비자소속')['수리비'].sum().nlargest(5)
         
-        st.write("**💰 수리비 상위 파트:**")
-        for idx, (part, cost) in enumerate(part_costs.items()):
-            icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
-            st.write(f"{icon} {part}: {cost:,.0f}원")
+        if not part_costs.empty:
+            st.write("**💰 수리비 상위 파트:**")
+            for idx, (part, cost) in enumerate(part_costs.items()):
+                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
+                st.write(f"{icon} {part}: {cost:,.0f}원")
+        else:
+            st.write("**💰 파트별 수리비 정보 없음**")
+    else:
+        st.write("**💰 파트 정보 없음**")
     
     # 업체별 수리비 (상위 5개)
-    client_col = '현장명' if '현장명' in current_data.columns else '업체명'
-    if client_col in current_data.columns and not current_data.empty:
-        client_costs = current_data.groupby(client_col)['수리비'].sum().nlargest(5)
+    client_col = None
+    if '현장명' in current_data.columns and current_data['현장명'].notna().any():
+        client_col = '현장명'
+    elif '업체명' in current_data.columns and current_data['업체명'].notna().any():
+        client_col = '업체명'
+    elif '현장' in current_data.columns and current_data['현장'].notna().any():
+        client_col = '현장'
+    
+    if client_col and not current_data.empty:
+        client_costs = current_data[current_data[client_col].notna()].groupby(client_col)['수리비'].sum().nlargest(5)
         
-        st.write("**🏢 수리비 상위 업체:**")
-        for idx, (client, cost) in enumerate(client_costs.items()):
-            icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
-            client_short = str(client)[:15] + "..." if len(str(client)) > 15 else str(client)
-            st.write(f"{icon} {client_short}: {cost:,.0f}원")
+        if not client_costs.empty:
+            st.write("**🏢 수리비 상위 업체:**")
+            for idx, (client, cost) in enumerate(client_costs.items()):
+                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
+                client_short = str(client)[:15] + "..." if len(str(client)) > 15 else str(client)
+                st.write(f"{icon} {client_short}: {cost:,.0f}원")
+        else:
+            st.write("**🏢 업체별 수리비 정보 없음**")
+    else:
+        st.write("**🏢 업체 정보 없음**")
 
-# 하단 상세 분석
+# 하단 상세 분석 - 수정된 버전
 st.header("📋 상세 분석")
 
 tab1, tab2, tab3 = st.tabs(["파트별", "업체별", "고장유형별"])
 
 with tab1:
-    if '정비자소속' in current_data.columns:
-        part_analysis = current_data.groupby('정비자소속').agg({
-            '관리번호': 'count',
-            '수리비': ['sum', 'mean']
-        })
-        part_analysis.columns = ['건수', '총수리비', '평균수리비']
-        part_analysis['효율성'] = part_analysis['건수'] / part_analysis['총수리비'] * 1000000
-        part_analysis = part_analysis.sort_values('총수리비', ascending=False)
+    st.subheader("👥 파트별 분석")
+    
+    if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
+        # NaN 제거 후 분석
+        valid_part_data = current_data[current_data['정비자소속'].notna()]
         
-        st.dataframe(
-            part_analysis.style.format({
-                '총수리비': '{:,.0f}원',
-                '평균수리비': '{:,.0f}원',
-                '효율성': '{:.2f}'
-            }),
-            use_container_width=True
-        )
+        if not valid_part_data.empty:
+            part_analysis = valid_part_data.groupby('정비자소속').agg({
+                '관리번호': 'count',
+                '수리비': ['sum', 'mean']
+            })
+            part_analysis.columns = ['건수', '총수리비', '평균수리비']
+            
+            # 0으로 나누기 방지
+            part_analysis['효율성'] = np.where(
+                part_analysis['총수리비'] > 0,
+                part_analysis['건수'] / part_analysis['총수리비'] * 1000000,
+                0
+            )
+            
+            part_analysis = part_analysis.sort_values('총수리비', ascending=False)
+            
+            st.dataframe(
+                part_analysis.style.format({
+                    '총수리비': '{:,.0f}원',
+                    '평균수리비': '{:,.0f}원',
+                    '효율성': '{:.2f}'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.info("파트별 데이터가 없습니다.")
+    else:
+        st.info("정비자소속 정보가 없습니다.")
 
 with tab2:
-    if client_col in current_data.columns:
-        client_analysis = current_data.groupby(client_col).agg({
-            '관리번호': 'count',
-            '수리비': ['sum', 'mean']
-        })
-        client_analysis.columns = ['건수', '총수리비', '평균수리비']
-        client_analysis = client_analysis.sort_values('총수리비', ascending=False).head(20)
+    st.subheader("🏢 업체별 분석")
+    
+    if client_col and client_col in current_data.columns:
+        valid_client_data = current_data[current_data[client_col].notna()]
         
-        st.dataframe(
-            client_analysis.style.format({
-                '총수리비': '{:,.0f}원',
-                '평균수리비': '{:,.0f}원'
-            }),
-            use_container_width=True
-        )
+        if not valid_client_data.empty:
+            client_analysis = valid_client_data.groupby(client_col).agg({
+                '관리번호': 'count',
+                '수리비': ['sum', 'mean']
+            })
+            client_analysis.columns = ['건수', '총수리비', '평균수리비']
+            client_analysis = client_analysis.sort_values('총수리비', ascending=False).head(20)
+            
+            st.dataframe(
+                client_analysis.style.format({
+                    '총수리비': '{:,.0f}원',
+                    '평균수리비': '{:,.0f}원'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.info("업체별 데이터가 없습니다.")
+    else:
+        st.info("업체 정보가 없습니다.")
 
 with tab3:
-    if '작업유형' in current_data.columns:
-        fault_analysis = current_data.groupby('작업유형').agg({
-            '관리번호': 'count',
-            '수리비': 'sum'
-        })
-        fault_analysis.columns = ['건수', '총수리비']
-        fault_analysis['비율'] = (fault_analysis['건수'] / fault_analysis['건수'].sum() * 100).round(1)
-        fault_analysis = fault_analysis.sort_values('건수', ascending=False)
+    st.subheader("🔧 고장유형별 분석")
+    
+    if '작업유형' in current_data.columns and current_data['작업유형'].notna().any():
+        valid_fault_data = current_data[current_data['작업유형'].notna()]
         
-        st.dataframe(
-            fault_analysis.style.format({
-                '총수리비': '{:,.0f}원',
-                '비율': '{:.1f}%'
-            }),
-            use_container_width=True
-        )
+        if not valid_fault_data.empty:
+            fault_analysis = valid_fault_data.groupby('작업유형').agg({
+                '관리번호': 'count',
+                '수리비': 'sum'
+            })
+            fault_analysis.columns = ['건수', '총수리비']
+            fault_analysis['비율'] = (fault_analysis['건수'] / fault_analysis['건수'].sum() * 100).round(1)
+            fault_analysis = fault_analysis.sort_values('건수', ascending=False)
+            
+            st.dataframe(
+                fault_analysis.style.format({
+                    '총수리비': '{:,.0f}원',
+                    '비율': '{:.1f}%'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.info("고장유형 데이터가 없습니다.")
+    else:
+        st.info("작업유형 정보가 없습니다.")
 
 # 액션 아이템
 st.markdown("---")
