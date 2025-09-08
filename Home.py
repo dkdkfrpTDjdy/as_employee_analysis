@@ -1,4 +1,4 @@
-# main.py - 조직도 매핑 디버깅 강화 버전
+# main.py - 조직도 매핑 디버깅 강화 버전 + 만족도 매핑 추가
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -89,7 +89,7 @@ def load_static_data():
             
             # 데이터 타입 정리
             for col in df4.columns:
-                if col in ['이름', '파트', '직급', '담당', '직책']:
+                if col in ['이름', '파트', '직급', '담당', '직책', '사번']:
                     df4[col] = df4[col].astype(str).str.strip()
                     df4[col] = df4[col].replace('nan', np.nan)
             
@@ -100,6 +100,88 @@ def load_static_data():
             df4 = None
     
     return df2, df4
+
+# 만족도 데이터와 조직도 매핑 함수 추가
+@st.cache_data
+def merge_satisfaction_by_employee_id(satisfaction_df, org_df):
+    """만족도 데이터를 사번 기준으로 조직도와 매핑"""
+    if satisfaction_df is None or org_df is None:
+        return satisfaction_df
+    
+    try:
+        df5 = satisfaction_df.copy()
+        org_temp = org_df.copy()
+        
+        # 사번을 문자열로 통일
+        df5['사번'] = df5['사번'].astype(str).str.strip()
+        org_temp['사번'] = org_temp['사번'].astype(str).str.strip()
+        
+        # 조직도에서 사번-파트 매핑 정보 추출
+        org_mapping = org_temp[['사번', '파트', '이름']].dropna()
+        
+        # 만족도 데이터와 조직도 매핑
+        df5_with_part = pd.merge(
+            df5,
+            org_mapping,
+            on='사번',
+            how='left'
+        )
+        
+        # 매핑 결과 확인
+        mapped_count = df5_with_part['파트'].notna().sum()
+        total_count = len(df5_with_part)
+        
+        st.info(f"만족도-조직도 매핑: {mapped_count}/{total_count}건 매핑됨")
+        
+        return df5_with_part
+        
+    except Exception as e:
+        st.error(f"만족도-조직도 매핑 중 오류: {e}")
+        return satisfaction_df
+
+def aggregate_satisfaction_by_part(satisfaction_df):
+    """파트별 만족도 통계 집계"""
+    if satisfaction_df is None or '파트' not in satisfaction_df.columns:
+        return None
+    
+    try:
+        # 파트별 만족도 통계 계산
+        part_satisfaction = satisfaction_df.groupby('파트').agg({
+            '만족도점수': [
+                'mean',      # 평균
+                'count',     # 응답 수
+                lambda x: (x >= 4).sum() / len(x) * 100,  # 만족률
+                lambda x: (x <= 2).sum() / len(x) * 100,  # 불만족률
+            ]
+        }).round(2)
+        
+        # 컬럼명 정리
+        part_satisfaction.columns = [
+            '만족도_평균', '만족도_응답수', '만족도_만족률', '만족도_불만족률'
+        ]
+        
+        # 만족도 등급 분류
+        def classify_satisfaction(avg_score):
+            if pd.isna(avg_score):
+                return '미조사'
+            elif avg_score >= 4.5:
+                return '매우만족'
+            elif avg_score >= 4.0:
+                return '만족'
+            elif avg_score >= 3.0:
+                return '보통'
+            elif avg_score >= 2.0:
+                return '불만족'
+            else:
+                return '매우불만족'
+        
+        part_satisfaction['만족도_등급'] = part_satisfaction['만족도_평균'].apply(classify_satisfaction)
+        
+        return part_satisfaction.reset_index()
+        
+    except Exception as e:
+        st.error(f"파트별 만족도 집계 중 오류: {e}")
+        return None
 
 # 초간단 머지 함수 - 완전 수정된 버전
 @st.cache_data
@@ -378,6 +460,24 @@ if uploaded_file1 is not None:
                 st.write("**📋 정비일지 컬럼:**")
                 st.write(df1.columns.tolist())
                 
+                # 만족도 데이터 전처리 및 조직도 매핑
+                if df5 is not None and df4 is not None:
+                    # 만족도 데이터 전처리
+                    if '답변' in df5.columns:
+                        df5['만족도점수'] = pd.to_numeric(df5['답변'], errors='coerce')
+                    
+                    # 조직도와 매핑 (사번 기준)
+                    df5_with_part = merge_satisfaction_by_employee_id(df5, df4)
+                    
+                    # 파트별 만족도 통계 집계
+                    part_satisfaction_stats = aggregate_satisfaction_by_part(df5_with_part)
+                    
+                    # 세션에 저장
+                    st.session_state.satisfaction_data = df5_with_part
+                    st.session_state.part_satisfaction_stats = part_satisfaction_stats
+                    
+                    st.success("✅ 만족도 데이터 처리 완료!")
+                
                 # 한 번에 모든 머지 수행
                 final_data = simple_merge_all(df1, df2, df3, df4, df5)
                 
@@ -406,9 +506,9 @@ if uploaded_file1 is not None:
                         st.metric("파트 수", "0개")
                 
                 with col4:
-                    if '만족도_평균' in final_data.columns:
-                        satisfaction_records = final_data['만족도_평균'].notna().sum()
-                        st.metric("만족도 조사", f"{satisfaction_records}건")
+                    if 'part_satisfaction_stats' in st.session_state and st.session_state.part_satisfaction_stats is not None:
+                        satisfaction_parts = len(st.session_state.part_satisfaction_stats)
+                        st.metric("만족도 조사 파트", f"{satisfaction_parts}개")
                     else:
                         st.metric("만족도 조사", "0건")
                 
@@ -487,3 +587,23 @@ if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 �
             else:
                 st.success("매핑률이 양호합니다.")
 
+# 만족도 매핑 상태 확인
+if st.session_state.data_loaded and 'part_satisfaction_stats' in st.session_state and st.checkbox("😊 만족도 매핑 상태 확인"):
+    if st.session_state.part_satisfaction_stats is not None:
+        satisfaction_stats = st.session_state.part_satisfaction_stats
+        
+        st.subheader("만족도 매핑 상세 분석")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**파트별 만족도 현황:**")
+            st.dataframe(satisfaction_stats, use_container_width=True)
+        
+        with col2:
+            st.write("**만족도 등급 분포:**")
+            grade_counts = satisfaction_stats['만족도_등급'].value_counts()
+            for grade, count in grade_counts.items():
+                st.write(f"• {grade}: {count}개 파트")
+    else:
+        st.info("만족도 데이터가 처리되지 않았습니다.")
