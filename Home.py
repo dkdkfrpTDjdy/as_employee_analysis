@@ -1,4 +1,4 @@
-# main.py - 초간단 버전
+# main.py - 전체 수정 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,7 +9,8 @@ warnings.filterwarnings('ignore')
 # 페이지 설정
 st.set_page_config(
     page_title="산업장비 AS 분석 대시보드",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # 세션 상태 초기화
@@ -19,14 +20,70 @@ if 'data_loaded' not in st.session_state:
 # 초간단 데이터 로드
 @st.cache_data(ttl=3600)
 def load_excel_simple(file):
-    """엑셀 파일 로드만"""
+    """엑셀 파일 로드 - 다양한 형식 지원"""
     try:
-        df = pd.read_excel(file, dtype=str)
-        df.columns = [str(col).strip().replace('\n', '') for col in df.columns]
-        return df
+        # 파일 확장자 확인
+        file_name = file.name.lower()
+        
+        # 여러 엔진으로 시도
+        engines_to_try = []
+        
+        if file_name.endswith('.xlsx'):
+            engines_to_try = ['openpyxl', None]
+        elif file_name.endswith('.xls'):
+            engines_to_try = ['xlrd', None]
+        else:
+            engines_to_try = ['openpyxl', 'xlrd', None]
+        
+        for engine in engines_to_try:
+            try:
+                if engine:
+                    df = pd.read_excel(file, dtype=str, engine=engine)
+                else:
+                    df = pd.read_excel(file, dtype=str)
+                
+                # 성공하면 컬럼명 정리 후 반환
+                df.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df.columns]
+                return df
+                
+            except Exception as engine_error:
+                continue
+        
+        # 모든 엔진 실패 시 에러
+        raise Exception(f"모든 엔진으로 로드 실패. 파일을 .xlsx 형식으로 다시 저장해보세요.")
+        
     except Exception as e:
         st.error(f"파일 로드 오류: {e}")
+        st.info("💡 **해결 방법**: Excel에서 '다른 이름으로 저장' → 'Excel 통합 문서(.xlsx)' 선택 후 다시 업로드")
         return None
+
+# 내장 데이터 로드
+@st.cache_data
+def load_static_data():
+    """내장 데이터 로드"""
+    df2, df4 = None, None
+    
+    # 자산조회 데이터
+    if os.path.exists("data/자산조회데이터.xlsx"):
+        try:
+            df2 = pd.read_excel("data/자산조회데이터.xlsx")
+            df2.columns = [str(col).strip().replace('\n', '') for col in df2.columns]
+        except:
+            df2 = None
+    
+    # 조직도 데이터
+    if os.path.exists("data/조직도데이터.xlsx"):
+        try:
+            df4 = pd.read_excel("data/조직도데이터.xlsx", dtype=str, header=None)
+            if len(df4.columns) >= 6:
+                df4.columns = ['이름', '파트', '직급', '담당', '직책', '사번']
+            else:
+                df4.columns = ['이름', '파트'] + [f'컬럼{i}' for i in range(2, len(df4.columns))]
+            df4 = df4.replace('', np.nan)
+        except:
+            df4 = None
+    
+    return df2, df4
 
 # 초간단 머지 함수
 @st.cache_data
@@ -92,10 +149,6 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 df3['관리번호'] = df3['관리번호'].astype(str)
                 df3['출고금액'] = pd.to_numeric(df3[cost_col], errors='coerce').fillna(0)
                 
-                # 날짜 처리
-                if '출고일자' in df3.columns:
-                    df3['출고일자'] = pd.to_datetime(df3['출고일자'], errors='coerce')
-                
                 # 간단 매핑: 관리번호별 총 출고금액
                 cost_summary = df3.groupby('관리번호')['출고금액'].sum().reset_index()
                 cost_summary.columns = ['관리번호', '수리비']
@@ -118,26 +171,28 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
     # 4. 조직도 데이터로 소속 매핑 (df4) - 수정된 버전
     if df4 is not None:
         try:
-            # 조직도 컬럼 정리
-            if len(df4.columns) >= 6:
-                df4.columns = ['이름', '파트', '직급', '담당', '직책', '사번']
-            
             # 정비자 이름으로 매핑
-            if '정비자' in result.columns and '이름' in df4.columns:
-                # 문자열로 변환 및 공백 제거
+            if '정비자' in result.columns and '이름' in df4.columns and '파트' in df4.columns:
+                # 문자열로 변환 및 정리
+                result['정비자_원본'] = result['정비자'].copy()  # 원본 보존
                 result['정비자'] = result['정비자'].astype(str).str.strip()
                 df4['이름'] = df4['이름'].astype(str).str.strip()
                 
-                # 조직도에서 필요한 컬럼만 선택
+                # 조직도에서 필요한 컬럼만 선택 (NaN 제거)
                 org_simple = df4[['이름', '파트']].dropna()
                 
-                # 이름으로 매핑 (기존 정비자 컬럼은 유지)
+                # 매핑 전 상태 확인
+                unique_workers = result['정비자'].nunique()
+                org_count = len(org_simple)
+                st.info(f"매핑 시도: 정비자 {unique_workers}명, 조직도 {org_count}명")
+                
+                # 이름으로 매핑
                 result = pd.merge(result, org_simple, left_on='정비자', right_on='이름', how='left')
                 
                 # 컬럼명 변경 및 중복 컬럼 제거
                 result = result.rename(columns={'파트': '정비자소속'})
                 
-                # 중복된 이름 컬럼 제거 (정비자 컬럼은 유지)
+                # 중복된 이름 컬럼 제거
                 if '이름' in result.columns:
                     result = result.drop('이름', axis=1)
                 
@@ -145,21 +200,41 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
                 st.info(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
                 
-                # 매핑 실패한 정비자들 확인 (디버깅용)
-                unmapped_workers = result[result['정비자소속'].isna()]['정비자'].value_counts()
-                if len(unmapped_workers) > 0:
-                    st.warning(f"⚠️ 매핑되지 않은 정비자: {len(unmapped_workers)}명")
-                    if st.sidebar.checkbox("매핑 실패 정비자 보기"):
-                        st.sidebar.write("**매핑 실패 정비자들:**")
-                        for worker, count in unmapped_workers.head(10).items():
-                            st.sidebar.write(f"• {worker}: {count}건")
+                # 매핑 실패한 경우 정비자명을 파트로 사용 (임시 해결책)
+                if mapped_count == 0:
+                    result['정비자소속'] = result['정비자']
+                    st.warning("⚠️ 조직도 매핑 실패로 정비자명을 파트명으로 사용합니다.")
+                else:
+                    # 매핑 실패한 정비자들 확인
+                    unmapped_workers = result[result['정비자소속'].isna()]['정비자'].value_counts()
+                    if len(unmapped_workers) > 0:
+                        st.warning(f"⚠️ 매핑되지 않은 정비자: {len(unmapped_workers)}명")
+                        
+                        # 매핑되지 않은 정비자도 본인 이름을 파트로 사용
+                        unmapped_mask = result['정비자소속'].isna()
+                        result.loc[unmapped_mask, '정비자소속'] = result.loc[unmapped_mask, '정비자']
             
             else:
-                st.warning("정비자 또는 조직도 이름 컬럼이 없습니다.")
+                st.warning("정비자 또는 조직도 컬럼이 없습니다.")
+                # 정비자를 파트로 사용
+                if '정비자' in result.columns:
+                    result['정비자소속'] = result['정비자']
+                    st.info("정비자명을 파트명으로 사용합니다.")
                 
         except Exception as e:
-            st.warning(f"조직도 매핑 실패: {e}")
-            st.exception(e)
+            st.error(f"조직도 매핑 실패: {e}")
+            # 실패 시에도 정비자를 파트로 사용
+            if '정비자' in result.columns:
+                result['정비자소속'] = result['정비자']
+                st.info("매핑 실패로 정비자명을 파트명으로 사용합니다.")
+    
+    # 정비자소속이 여전히 없으면 기본값 설정
+    if '정비자소속' not in result.columns:
+        if '정비자' in result.columns:
+            result['정비자소속'] = result['정비자']
+        else:
+            result['정비자소속'] = '미분류'
+        st.info("정비자소속 컬럼을 생성했습니다.")
     
     # 5. 만족도 데이터 간단 매핑 (df5)
     if df5 is not None and '관리번호' in df5.columns:
@@ -199,9 +274,9 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
         result['지역'] = result['현장'].apply(extract_region_simple)
         result['현장명'] = result['현장']
     
-    # 7. 필요 없는 컬럼 정리 (메모리 절약)
+    # 7. 필요한 컬럼만 유지 (메모리 절약)
     keep_columns = [
-        '관리번호', '정비일자', '년월', '정비자', '정비자소속', '정비자번호',
+        '관리번호', '정비일자', '년월', '정비자', '정비자소속',
         '브랜드', '모델명', '수리비', '작업유형', '정비대상', '정비작업',
         '현장명', '지역', '수리시간', '가동시간'
     ]
@@ -216,29 +291,12 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
     
     return result
 
-# 내장 데이터 로드
-@st.cache_data
-def load_static_data():
-    """내장 데이터 로드"""
-    df2, df4 = None, None
-    
-    # 자산조회 데이터
-    if os.path.exists("data/자산조회데이터.xlsx"):
-        df2 = pd.read_excel("data/자산조회데이터.xlsx")
-        df2.columns = [str(col).strip() for col in df2.columns]
-    
-    # 조직도 데이터
-    if os.path.exists("data/조직도데이터.xlsx"):
-        df4 = pd.read_excel("data/조직도데이터.xlsx", dtype=str, header=None)
-    
-    return df2, df4
-
 # 사이드바
 st.sidebar.title("📁 데이터 업로드")
 
-uploaded_file1 = st.sidebar.file_uploader("**정비일지 데이터**", type=["xlsx"])
-uploaded_file3 = st.sidebar.file_uploader("**소모품 출고 데이터**", type=["xlsx"])
-uploaded_file5 = st.sidebar.file_uploader("**만족도 조사 데이터**", type=["xlsx"])
+uploaded_file1 = st.sidebar.file_uploader("**정비일지 데이터**", type=["xlsx", "xls"])
+uploaded_file3 = st.sidebar.file_uploader("**소모품 출고 데이터**", type=["xlsx", "xls"])
+uploaded_file5 = st.sidebar.file_uploader("**만족도 조사 데이터**", type=["xlsx", "xls"])
 
 # 내장 데이터
 df2, df4 = load_static_data()
@@ -298,6 +356,33 @@ if uploaded_file1 is not None:
                 st.subheader("📋 데이터 미리보기")
                 st.dataframe(final_data.head(10), use_container_width=True)
                 
+                # 매핑 상태 확인
+                if st.checkbox("🔍 매핑 상태 상세 확인"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**정비자 정보:**")
+                        if '정비자' in final_data.columns:
+                            workers = final_data['정비자'].value_counts().head(5)
+                            for worker, count in workers.items():
+                                st.write(f"• {worker}: {count}건")
+                        
+                        if '정비자소속' in final_data.columns:
+                            parts = final_data['정비자소속'].value_counts().head(5)
+                            st.write("**파트 정보:**")
+                            for part, count in parts.items():
+                                st.write(f"• {part}: {count}건")
+                    
+                    with col2:
+                        if df4 is not None:
+                            st.write("**조직도 정보:**")
+                            st.write(f"• 조직도 레코드: {len(df4)}건")
+                            if '이름' in df4.columns:
+                                org_names = df4['이름'].dropna().head(5).tolist()
+                                st.write("• 조직도 이름:")
+                                for name in org_names:
+                                    st.write(f"  - {name}")
+                
         except Exception as e:
             st.error(f"데이터 처리 실패: {e}")
             st.exception(e)
@@ -313,4 +398,3 @@ else:
     - **🏢 업체별 분석**: 디마케팅 위험도 분석
     - **📅 월별 분석**: 종합 리포트 및 다운로드
     """)
-
