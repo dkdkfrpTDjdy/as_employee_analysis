@@ -93,7 +93,6 @@ def load_static_data():
                     df4[col] = df4[col].replace('nan', np.nan)
                         
         except Exception as e:
-            st.sidebar.error(f"조직도 로드 오류: {e}")
             df4 = None
     
     return df2, df4
@@ -124,16 +123,9 @@ def merge_satisfaction_by_employee_id(satisfaction_df, org_df):
             how='left'
         )
         
-        # 매핑 결과 확인
-        mapped_count = df5_with_part['파트'].notna().sum()
-        total_count = len(df5_with_part)
-        
-        st.info(f"만족도-조직도 매핑: {mapped_count}/{total_count}건 매핑됨")
-        
         return df5_with_part
         
     except Exception as e:
-        st.error(f"만족도-조직도 매핑 중 오류: {e}")
         return satisfaction_df
 
 def aggregate_satisfaction_by_part(satisfaction_df):
@@ -177,7 +169,6 @@ def aggregate_satisfaction_by_part(satisfaction_df):
         return part_satisfaction.reset_index()
         
     except Exception as e:
-        st.error(f"파트별 만족도 집계 중 오류: {e}")
         return None
 
 # 초간단 머지 함수 - 완전 수정된 버전
@@ -218,10 +209,9 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
             df2_simple['관리번호'] = df2_simple['관리번호'].astype(str)
             
             result = pd.merge(result, df2_simple, on='관리번호', how='left')
-            st.info(f"✅ 자산 데이터 머지 완료")
             
         except Exception as e:
-            st.warning(f"자산 데이터 머지 실패: {e}")
+            pass
     
     # 브랜드 정리
     if '브랜드' not in result.columns:
@@ -250,19 +240,12 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 
                 result = pd.merge(result, cost_summary, on='관리번호', how='left')
                 result['수리비'] = result['수리비'].fillna(0)
-                
-                mapped_count = (result['수리비'] > 0).sum()
-                mapping_rate = (mapped_count / len(result) * 100)
-                st.info(f"✅ 수리비 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
             
         except Exception as e:
-            st.warning(f"수리비 매핑 실패: {e}")
             result['수리비'] = 0
     
     # 4. 조직도 데이터로 소속 매핑 (df4) - 수정된 버전
     if df4 is not None:
-        st.write("### 🔍 조직도 매핑 디버깅")
-        
         # 조직도 데이터 정리
         df4_clean = df4.copy()
         
@@ -275,41 +258,12 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
         # NaN 제거
         df4_clean = df4_clean.dropna(subset=['이름', '파트'])
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**📋 정비일지 정비자:**")
-            if '정비자' in result.columns:
-                # 정비자 데이터 정리
-                result['정비자_clean'] = result['정비자'].astype(str).str.strip()
-                result['정비자_clean'] = result['정비자_clean'].replace(['nan', 'NaN', ''], np.nan)
-                
-                workers = result['정비자_clean'].dropna().value_counts().head(10)
-                st.write(f"• 총 정비자 수: {len(workers)}명")
-                st.write("• 상위 10명:")
-                for worker, count in workers.items():
-                    st.write(f"  - '{worker}': {count}건")
-        
-        with col2:
-            st.write("**👥 조직도 정보:**")
-            st.write(f"• 조직도 레코드: {len(df4_clean)}건")
-            st.write("• 조직도 이름 샘플:")
-            for name in df4_clean['이름'].head(10):
-                st.write(f"  - '{name}'")
-        
         try:
             if '정비자' in result.columns and '이름' in df4_clean.columns and '파트' in df4_clean.columns:
                 
-                # 매핑 전 공통 이름 확인
-                workers_set = set(result['정비자_clean'].dropna().unique())
-                org_set = set(df4_clean['이름'].unique())
-                common_names = workers_set & org_set
-                
-                st.write(f"**정확한 공통 이름: {len(common_names)}개**")
-                if common_names:
-                    st.write("공통 이름들:")
-                    for name in list(common_names)[:10]:
-                        st.write(f"  - '{name}'")
+                # 정비자 데이터 정리
+                result['정비자_clean'] = result['정비자'].astype(str).str.strip()
+                result['정비자_clean'] = result['정비자_clean'].replace(['nan', 'NaN', ''], np.nan)
                 
                 # 정확한 매칭만 수행 (부분 매칭 제거)
                 org_mapping = df4_clean[['이름', '파트']].set_index('이름')['파트'].to_dict()
@@ -322,43 +276,19 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 
                 result['정비자소속'] = result['정비자_clean'].apply(map_to_part)
                 
-                # 매핑 결과 확인
-                mapped_count = result['정비자소속'].notna().sum()
-                mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
-                
-                st.success(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
-                
-                # 매핑되지 않은 정비자들 표시 (대체하지 않음)
+                # 매핑되지 않은 것들은 '미분류'로 처리
                 unmapped_mask = result['정비자소속'].isna()
                 if unmapped_mask.any():
-                    unmapped_workers = result.loc[unmapped_mask, '정비자_clean'].dropna().value_counts()
-                    st.warning(f"⚠️ 매핑되지 않은 정비자: {len(unmapped_workers)}명")
-                    
-                    # 상위 10명만 표시
-                    st.write("**매핑되지 않은 정비자 (상위 10명):**")
-                    for worker, count in unmapped_workers.head(10).items():
-                        st.write(f"  - '{worker}': {count}건")
-                    
-                    # 매핑되지 않은 것들은 '미분류'로 처리
                     result.loc[unmapped_mask, '정비자소속'] = '미분류'
                 
                 # 임시 컬럼 제거
                 if '정비자_clean' in result.columns:
                     result = result.drop('정비자_clean', axis=1)
-                
-                # 최종 파트 현황
-                st.write("**📊 최종 파트 현황:**")
-                part_counts = result['정비자소속'].value_counts().head(10)
-                for part, count in part_counts.items():
-                    st.write(f"  - {part}: {count}건")
             
             else:
-                st.error("필요한 컬럼이 없습니다!")
                 result['정비자소속'] = '미분류'
                 
         except Exception as e:
-            st.error(f"조직도 매핑 실패: {e}")
-            st.exception(e)
             result['정비자소속'] = '미분류'
     
     else:
@@ -379,12 +309,9 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
                 satisfaction_summary.columns = ['관리번호', '만족도_평균', '만족도_응답수']
                 
                 result = pd.merge(result, satisfaction_summary, on='관리번호', how='left')
-                
-                mapped_count = result['만족도_평균'].notna().sum()
-                st.info(f"✅ 만족도 매핑 완료: {mapped_count}건")
             
         except Exception as e:
-            st.warning(f"만족도 매핑 실패: {e}")
+            pass
     
     # 6. 지역 정보 추출
     if '현장' in result.columns:
@@ -416,18 +343,10 @@ def simple_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
 
     # 8. AWP 파트 제외 처리
     if '정비자소속' in result.columns:
-        before_count = len(result)
         # AWP가 포함된 파트 제외
         result = result[~result['정비자소속'].str.contains('AWP', case=False, na=False)]
-        after_count = len(result)
-        
-        if before_count != after_count:
-            excluded_count = before_count - after_count
-            st.info(f"✅ AWP 파트 제외: {excluded_count}건 제외됨")
     
     return result
-
-
 
 # 사이드바
 st.sidebar.title("📁 데이터 업로드")
@@ -438,17 +357,6 @@ uploaded_file5 = st.sidebar.file_uploader("**만족도 조사 데이터**", type
 
 # 내장 데이터
 df2, df4 = load_static_data()
-
-if df2 is not None:
-    st.sidebar.success("✅ 자산조회 데이터 준비됨")
-else:
-    st.sidebar.warning("⚠️ 자산조회 데이터 없음")
-
-if df4 is not None:
-    st.sidebar.success("✅ 조직도 데이터 준비됨")
-    st.sidebar.write(f"조직도 레코드: {len(df4)}건")
-else:
-    st.sidebar.error("❌ 조직도 데이터 없음")
 
 # 메인
 st.title("🏭 산업장비 AS 분석 대시보드")
@@ -464,12 +372,6 @@ if uploaded_file1 is not None:
             df5 = load_excel_simple(uploaded_file5) if uploaded_file5 else None
             
             if df1 is not None:
-                st.success("✅ 정비일지 데이터 로드 완료")
-                
-                # 정비일지 컬럼 확인
-                st.write("**📋 정비일지 컬럼:**")
-                st.write(df1.columns.tolist())
-                
                 # 만족도 데이터 전처리 및 조직도 매핑
                 if df5 is not None and df4 is not None:
                     # 만족도 데이터 전처리
@@ -486,7 +388,6 @@ if uploaded_file1 is not None:
                     st.session_state.satisfaction_data = df5_with_part
                     st.session_state.part_satisfaction_stats = part_satisfaction_stats
 
-                
                 # 한 번에 모든 머지 수행
                 final_data = simple_merge_all(df1, df2, df3, df4, df5)
                 
@@ -494,9 +395,10 @@ if uploaded_file1 is not None:
                 st.session_state.df1_with_costs = final_data
                 st.session_state.data_loaded = True
                 
+                st.success("✅ 데이터 처리 완료")
+                
         except Exception as e:
             st.error(f"데이터 처리 실패: {e}")
-            st.exception(e)
 
 else:
     st.info("👈 정비일지 데이터를 업로드해주세요.")
