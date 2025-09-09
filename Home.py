@@ -1,4 +1,12 @@
 import streamlit as st
+
+# 페이지 설정을 맨 첫 번째로 이동
+st.set_page_config(
+    page_title="산업장비 AS 분석 대시보드",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import numpy as np
 import os
@@ -6,9 +14,9 @@ import warnings
 from io import BytesIO
 warnings.filterwarnings('ignore')
 
-# 데이터 프로세싱 모듈 임포트
+# 데이터 프로세싱 모듈 임포트 (utils 폴더에서)
 try:
-    from data_processing import (
+    from utils.data_processing import (
         load_data,
         load_static_data,
         create_df3_with_organization,
@@ -22,16 +30,12 @@ try:
         extract_and_apply_region
     )
     DATA_PROCESSING_AVAILABLE = True
-except ImportError:
-    st.error("데이터 프로세싱 모듈을 찾을 수 없습니다!")
+    st.sidebar.success("✅ 데이터 프로세싱 모듈 활성화")
+except ImportError as e:
+    st.error(f"데이터 프로세싱 모듈을 찾을 수 없습니다: {e}")
+    st.error("utils/data_processing.py 파일이 있는지 확인해주세요.")
     DATA_PROCESSING_AVAILABLE = False
-
-# 페이지 설정
-st.set_page_config(
-    page_title="산업장비 AS 분석 대시보드",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+    st.sidebar.error("❌ 데이터 프로세싱 모듈 비활성화")
 
 # 세션 상태 초기화
 if 'data_loaded' not in st.session_state:
@@ -46,6 +50,32 @@ def to_excel_download(df, filename):
     output.seek(0)
     return output.getvalue()
 
+# 간단한 엑셀 로드 함수 (백업용)
+@st.cache_data(ttl=3600)
+def load_excel_simple(file):
+    """엑셀 파일 로드 - 기본 버전"""
+    try:
+        engines_to_try = ['openpyxl', 'xlrd', None]
+        
+        for engine in engines_to_try:
+            try:
+                if engine:
+                    df = pd.read_excel(file, dtype=str, engine=engine)
+                else:
+                    df = pd.read_excel(file, dtype=str)
+                
+                df.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df.columns]
+                return df
+                
+            except Exception:
+                continue
+        
+        raise Exception("모든 엔진으로 로드 실패")
+        
+    except Exception as e:
+        st.error(f"파일 로드 오류: {e}")
+        return None
+
 # 사이드바
 st.sidebar.title("📁 데이터 업로드")
 
@@ -59,6 +89,19 @@ st.markdown("---")
 
 if not DATA_PROCESSING_AVAILABLE:
     st.error("데이터 프로세싱 모듈이 필요합니다!")
+    st.info("다음 단계를 확인해주세요:")
+    st.write("1. `utils/data_processing.py` 파일이 있는지 확인")
+    st.write("2. `utils/__init__.py` 파일이 있는지 확인")
+    st.write("3. 파일 권한 확인")
+    
+    # 기본 기능만 제공
+    if uploaded_file1 is not None:
+        st.write("### 기본 데이터 로드 (제한된 기능)")
+        df1 = load_excel_simple(uploaded_file1)
+        if df1 is not None:
+            st.write(f"데이터 로드 완료: {len(df1)}행, {len(df1.columns)}컬럼")
+            st.dataframe(df1.head())
+    
     st.stop()
 
 # 데이터 처리
@@ -160,8 +203,6 @@ if uploaded_file1 is not None:
             st.exception(e)
 else:
     st.info("👈 정비일지 데이터를 업로드해주세요.")
-
-st.sidebar.success("✅ 데이터 프로세싱 모듈 활성화")
 
 st.markdown("""
 ## 🎯 분석 메뉴
