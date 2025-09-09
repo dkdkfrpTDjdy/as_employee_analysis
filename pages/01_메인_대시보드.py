@@ -1,4 +1,4 @@
-# pages/01_경영_대시보드.py - df3 기준 지역별/고장유형별 분석 추가
+ pages/01_경영_대시보드.py - 차트 오류 수정 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -381,24 +381,28 @@ with tab3:
                 region_analysis['평균수리비'] = (region_analysis['수리비'] / region_analysis['건수']).round(0)
                 region_analysis = region_analysis.sort_values('수리비', ascending=False)
                 
-                # 지역별 건수 차트
+                # 지역별 건수 차트 - 수정된 버전
+                region_data_for_chart = region_analysis.reset_index()
+                
                 fig = px.bar(
-                    x=region_analysis.index,
-                    y=region_analysis['건수'],
+                    region_data_for_chart,
+                    x='지역',
+                    y='건수',
                     title="지역별 AS 건수",
-                    color=region_analysis['건수'],
+                    color='건수',
                     color_continuous_scale='Blues'
                 )
                 fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                # 지역별 수리비 차트
+                # 지역별 수리비 차트 - 수정된 버전
                 fig = px.bar(
-                    x=region_analysis.index,
-                    y=region_analysis['수리비'],
+                    region_data_for_chart,
+                    x='지역',
+                    y='수리비',
                     title="지역별 총 수리비",
-                    color=region_analysis['수리비'],
+                    color='수리비',
                     color_continuous_scale='Reds'
                 )
                 fig.update_layout(height=400)
@@ -445,24 +449,32 @@ with tab4:
         material_analysis['비율(%)'] = (material_analysis['건수'] / material_analysis['건수'].sum() * 100).round(1)
         material_analysis = material_analysis.sort_values('수리비', ascending=False).head(10)
         
-        # 자재별 수리비 차트
-        fig = px.bar(
-            x=material_analysis['수리비'],
-            y=[name[:20] + "..." if len(str(name)) > 20 else str(name) for name in material_analysis.index],
-            orientation='h',
-            title="주요 자재별 수리비 (상위 10개)",
-            color=material_analysis['수리비'],
-            color_continuous_scale='Oranges'
-        )
-        fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # 상위 5개 자재 표시
-        for idx, (material, row) in enumerate(material_analysis.head(5).iterrows()):
-            icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
-            material_short = str(material)[:25] + "..." if len(str(material)) > 25 else str(material)
-            st.write(f"{icon} {material_short}")
-            st.write(f"   {row['건수']}건 ({row['비율(%)']:.1f}%) - {row['수리비']:,.0f}원")
+        # 자재별 수리비 차트 - 수정된 버전
+        if not material_analysis.empty:
+            # 데이터프레임으로 변환하여 차트 생성
+            chart_data = material_analysis.reset_index()
+            chart_data['자재명_short'] = chart_data['자재명'].apply(
+                lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
+            )
+            
+            fig = px.bar(
+                chart_data,
+                x='수리비',
+                y='자재명_short',
+                orientation='h',
+                title="주요 자재별 수리비 (상위 10개)",
+                color='수리비',
+                color_continuous_scale='Oranges'
+            )
+            fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 상위 5개 자재 표시
+            for idx, (material, row) in enumerate(material_analysis.head(5).iterrows()):
+                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
+                material_short = str(material)[:25] + "..." if len(str(material)) > 25 else str(material)
+                st.write(f"{icon} {material_short}")
+                st.write(f"   {row['건수']}건 ({row['비율(%)']:.1f}%) - {row['수리비']:,.0f}원")
     
     else:
         # df1 기준 고장유형 분석 (백업)
