@@ -4,23 +4,15 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
-import sys
-import os
-
-# 유틸리티 함수 import
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from data_processing_utils import (
-    map_employee_data, 
-    merge_repair_costs,
-    clean_string_data,
-    normalize_names_for_matching,
-    setup_logging
-)
+import logging
+import re
 
 st.set_page_config(page_title="파트별 심층 분석", layout="wide")
 st.title("🔍 파트별 심층 분석 (df3 수리품목 중심)")
 
-logger = setup_logging()
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 엑셀 다운로드 함수
 def to_excel_download(df, filename):
@@ -31,6 +23,59 @@ def to_excel_download(df, filename):
     output.seek(0)
     return output.getvalue()
 
+# 문자열 정리 함수
+def clean_string_data(df, columns=None):
+    """문자열 데이터 정리 함수"""
+    df_copy = df.copy()
+    
+    if columns is None:
+        columns = df_copy.select_dtypes(include=['object']).columns
+    
+    for col in columns:
+        if col in df_copy.columns:
+            df_copy[col] = df_copy[col].astype(str)
+            df_copy[col] = df_copy[col].str.strip()
+            df_copy[col] = df_copy[col].replace(['nan', 'NaN', 'None', 'null', ''], np.nan)
+            df_copy[col] = df_copy[col].str.replace(r'\s+', ' ', regex=True)
+    
+    return df_copy
+
+# 조직도 매핑 함수 (간소화 버전)
+def map_employee_to_org(df, org_df, employee_col, org_name_col='이름'):
+    """직원을 조직도와 매핑하는 함수"""
+    if org_df is None or df is None:
+        return df
+    
+    try:
+        result_df = df.copy()
+        org_temp = org_df.copy()
+        
+        # 문자열 정리
+        result_df[employee_col] = result_df[employee_col].astype(str).str.strip()
+        org_temp[org_name_col] = org_temp[org_name_col].astype(str).str.strip()
+        
+        # NaN 제거
+        org_clean = org_temp[[org_name_col, '파트', '직급', '직책']].dropna(subset=[org_name_col, '파트'])
+        
+        # 매핑 수행
+        result_df = pd.merge(
+            result_df,
+            org_clean,
+            left_on=employee_col,
+            right_on=org_name_col,
+            how='left'
+        )
+        
+        # 중복 컬럼 제거
+        if org_name_col in result_df.columns and org_name_col != employee_col:
+            result_df = result_df.drop(org_name_col, axis=1)
+        
+        return result_df
+        
+    except Exception as e:
+        logger.error(f"조직도 매핑 오류: {e}")
+        return df
+
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
     st.warning("⚠️ 메인 페이지에서 데이터를 먼저 업로드해주세요.")
@@ -39,16 +84,20 @@ if 'df1_with_costs' not in st.session_state:
 # 기본 데이터 로드
 df1_data = st.session_state.get('df1_with_costs', pd.DataFrame())
 df3_data = st.session_state.get('df3_with_org', None)
-org_data = st.session_state.get('org_data', None)
+
+# df3가 없으면 df1에서 수리비 정보 활용
+if df3_data is None:
+    st.warning("df3 수리품목 데이터가 없습니다. df1 데이터를 기반으로 분석합니다.")
+    df3_data = df1_data.copy() if not df1_data.empty else None
+
+if df3_data is None:
+    st.error("분석할 데이터가 없습니다.")
+    st.stop()
 
 # df3 중심 데이터 처리 및 통합
 @st.cache_data(show_spinner=False)
-def create_df3_centered_analysis(df1, df3, org_df):
-    """df3를 중심으로 df1과 조직도를 통합하여 분석용 데이터 생성"""
-    
-    if df3 is None:
-        st.error("df3 수리품목 데이터가 없습니다.")
-        return None
+def create_df3_centered_analysis(df1, df3):
+    """df3를 중심으로 df1과 통합하여 분석용 데이터 생성"""
     
     logger.info("df3 중심 분석 데이터 생성 시작")
     
@@ -56,11 +105,18 @@ def create_df3_centered_analysis(df1, df3, org_df):
     df3_processed = df3.copy()
     
     # 출고일자 처리
-    if '출고일자' in df3_processed.columns:
-        df3_processed['출고일자'] = pd.to_datetime(df3_processed['출고일자'], errors='coerce')
-        df3_processed['출고년'] = df3_processed['출고일자'].dt.year
-        df3_processed['출고월'] = df3_processed['출고일자'].dt.month
-        df3_processed['출고년월'] = df3_processed['출고일자'].dt.to_period('M')
+    date_cols = ['출고일자', '정비일자']
+    for col in date_cols:
+        if col in df3_processed.columns:
+            df3_processed[col] = pd.to_datetime(df3_processed[col], errors='coerce')
+            if col == '출고일자':
+                df3_processed['출고년'] = df3_processed[col].dt.year
+                df3_processed['출고월'] = df3_processed[col].dt.month
+                df3_processed['출고년월'] = df3_processed[col].dt.to_period('M')
+            elif col == '정비일자':
+                df3_processed['정비년'] = df3_processed[col].dt.year
+                df3_processed['정비월'] = df3_processed[col].dt.month
+                df3_processed['정비년월'] = df3_processed[col].dt.to_period('M')
     
     # 수리비 처리
     cost_col = None
@@ -78,49 +134,28 @@ def create_df3_centered_analysis(df1, df3, org_df):
     if '관리번호' in df3_processed.columns:
         df3_processed['관리번호'] = df3_processed['관리번호'].astype(str).str.strip()
     
-    # 조직도 매핑 (출고자 기준)
-    if org_df is not None and '출고자' in df3_processed.columns:
-        st.write("### 🔍 조직도 매핑 (출고자 기준)")
-        
-        # 출고자를 사번으로 간주하여 매핑
-        df3_processed['출고자'] = df3_processed['출고자'].astype(str).str.strip()
-        org_clean = org_df.copy()
-        
-        # 조직도 컬럼 정리
-        if '사번' in org_clean.columns and '파트' in org_clean.columns:
-            org_clean['사번'] = org_clean['사번'].astype(str).str.strip()
-            org_mapping = org_clean[['사번', '파트', '직급', '직책']].dropna(subset=['사번', '파트'])
-            
-            # 매핑 수행
-            df3_processed = pd.merge(
-                df3_processed,
-                org_mapping,
-                left_on='출고자',
-                right_on='사번',
-                how='left'
-            )
-            
-            # 매핑 결과 확인
-            mapped_count = df3_processed['파트'].notna().sum()
-            mapping_rate = (mapped_count / len(df3_processed) * 100) if len(df3_processed) > 0 else 0
-            
-            st.write(f"**조직도 매핑 결과: {mapped_count}건 ({mapping_rate:.1f}%)**")
-            
-            if mapped_count == 0:
-                st.warning("조직도 매핑이 실패했습니다. 출고자를 파트로 사용합니다.")
-                df3_processed['파트'] = df3_processed['출고자']
+    # 파트 정보 처리
+    if '파트' not in df3_processed.columns:
+        # 출고자나 정비자를 파트로 사용
+        if '출고자' in df3_processed.columns:
+            df3_processed['파트'] = df3_processed['출고자']
+        elif '정비자' in df3_processed.columns:
+            df3_processed['파트'] = df3_processed['정비자']
+        elif '정비자소속' in df3_processed.columns:
+            df3_processed['파트'] = df3_processed['정비자소속']
         else:
-            st.warning("조직도에 필요한 컬럼이 없습니다.")
-            df3_processed['파트'] = df3_processed.get('출고자', '미분류')
+            df3_processed['파트'] = '미분류'
     
-    # df1과 매핑 (년월 + 관리번호 기준으로 업체명과 작업유형 정보 가져오기)
-    if not df1.empty and '정비일자' in df1.columns and '관리번호' in df1.columns:
+    # df1과 매핑 (업체명과 작업유형 정보 가져오기)
+    if not df1.empty and '관리번호' in df1.columns:
         st.write("### 🔍 df1과 매핑 (업체명, 작업유형)")
         
         # df1 전처리
         df1_temp = df1.copy()
-        df1_temp['정비일자'] = pd.to_datetime(df1_temp['정비일자'], errors='coerce')
-        df1_temp['정비년월'] = df1_temp['정비일자'].dt.to_period('M')
+        if '정비일자' in df1_temp.columns:
+            df1_temp['정비일자'] = pd.to_datetime(df1_temp['정비일자'], errors='coerce')
+            df1_temp['정비년월'] = df1_temp['정비일자'].dt.to_period('M')
+        
         df1_temp['관리번호'] = df1_temp['관리번호'].astype(str).str.strip()
         
         # 대분류/중분류/소분류 합쳐서 작업유형 생성
@@ -145,48 +180,49 @@ def create_df3_centered_analysis(df1, df3, org_df):
                 client_col = col
                 break
         
-        # 매핑할 컬럼들 준비
-        mapping_cols = ['관리번호', '정비년월']
-        if client_col:
-            mapping_cols.append(client_col)
-        if '작업유형' in df1_temp.columns:
-            mapping_cols.append('작업유형')
-        
-        if len(mapping_cols) > 2:
-            # 년월 + 관리번호 기준 매핑
-            df1_mapping = df1_temp[mapping_cols].drop_duplicates()
-            
-            df3_processed = pd.merge(
-                df3_processed,
-                df1_mapping,
-                left_on=['관리번호', '출고년월'],
-                right_on=['관리번호', '정비년월'],
-                how='left'
-            )
-            
-            # 매핑되지 않은 경우 관리번호만으로 재시도
+        # 매핑 수행
+        if client_col or '작업유형' in df1_temp.columns:
+            mapping_cols = ['관리번호']
             if client_col:
-                unmapped_mask = df3_processed[client_col].isna()
-                if unmapped_mask.any():
-                    simple_mapping_cols = ['관리번호']
-                    if client_col:
-                        simple_mapping_cols.append(client_col)
-                    if '작업유형' in df1_temp.columns:
-                        simple_mapping_cols.append('작업유형')
-                    
-                    df1_mapping_simple = df1_temp[simple_mapping_cols].drop_duplicates().groupby('관리번호').first()
-                    
-                    for idx, row in df3_processed[unmapped_mask].iterrows():
-                        if row['관리번호'] in df1_mapping_simple.index:
-                            for col in simple_mapping_cols[1:]:
-                                df3_processed.loc[idx, col] = df1_mapping_simple.loc[row['관리번호'], col]
+                mapping_cols.append(client_col)
+            if '작업유형' in df1_temp.columns:
+                mapping_cols.append('작업유형')
+            
+            # 년월 기준 매핑 시도
+            if '정비년월' in df1_temp.columns and '출고년월' in df3_processed.columns:
+                mapping_cols.append('정비년월')
+                df1_mapping = df1_temp[mapping_cols].drop_duplicates()
+                
+                df3_processed = pd.merge(
+                    df3_processed,
+                    df1_mapping,
+                    left_on=['관리번호', '출고년월'],
+                    right_on=['관리번호', '정비년월'],
+                    how='left'
+                )
+                
+                # 정비년월 컬럼 제거
+                if '정비년월' in df3_processed.columns:
+                    df3_processed = df3_processed.drop('정비년월', axis=1)
+            else:
+                # 관리번호만으로 매핑
+                df1_mapping = df1_temp[mapping_cols].drop_duplicates().groupby('관리번호').first().reset_index()
+                
+                df3_processed = pd.merge(
+                    df3_processed,
+                    df1_mapping,
+                    on='관리번호',
+                    how='left'
+                )
             
             # 컬럼명 통일
-            if client_col:
+            if client_col and client_col in df3_processed.columns:
                 df3_processed['업체명'] = df3_processed[client_col]
+                if client_col != '업체명':
+                    df3_processed = df3_processed.drop(client_col, axis=1)
             
             # 매핑 결과 확인
-            if client_col:
+            if '업체명' in df3_processed.columns:
                 mapped_clients = df3_processed['업체명'].notna().sum()
                 st.write(f"**업체명 매핑: {mapped_clients}건**")
             
@@ -194,17 +230,11 @@ def create_df3_centered_analysis(df1, df3, org_df):
                 mapped_work_types = df3_processed['작업유형'].notna().sum()
                 st.write(f"**작업유형 매핑: {mapped_work_types}건**")
     
-    # 임시 컬럼 정리
-    if '정비년월' in df3_processed.columns:
-        df3_processed = df3_processed.drop('정비년월', axis=1)
-    if '사번' in df3_processed.columns:
-        df3_processed = df3_processed.drop('사번', axis=1)
-    
     logger.info(f"df3 중심 분석 데이터 생성 완료: {len(df3_processed)}건")
     return df3_processed
 
 # 통합 데이터 생성
-df3_integrated = create_df3_centered_analysis(df1_data, df3_data, org_data)
+df3_integrated = create_df3_centered_analysis(df1_data, df3_data)
 
 if df3_integrated is None or df3_integrated.empty:
     st.error("분석할 데이터가 없습니다.")
@@ -212,16 +242,17 @@ if df3_integrated is None or df3_integrated.empty:
 
 # 파트 컬럼 확인
 if '파트' not in df3_integrated.columns or df3_integrated['파트'].isna().all():
-    st.error("파트 정보가 없습니다. 조직도 매핑을 확인해주세요.")
+    st.error("파트 정보가 없습니다.")
     st.stop()
 
 # 사이드바 필터
 st.sidebar.header("🔧 분석 옵션")
 
 # 기간 필터
-if '출고일자' in df3_integrated.columns and df3_integrated['출고일자'].notna().any():
-    min_date = df3_integrated['출고일자'].min().date()
-    max_date = df3_integrated['출고일자'].max().date()
+date_col = '출고일자' if '출고일자' in df3_integrated.columns else '정비일자'
+if date_col in df3_integrated.columns and df3_integrated[date_col].notna().any():
+    min_date = df3_integrated[date_col].min().date()
+    max_date = df3_integrated[date_col].max().date()
     
     date_range = st.sidebar.date_input(
         "분석 기간",
@@ -233,32 +264,38 @@ if '출고일자' in df3_integrated.columns and df3_integrated['출고일자'].n
     if len(date_range) == 2:
         start_date, end_date = date_range
         df3_integrated = df3_integrated[
-            (df3_integrated['출고일자'].dt.date >= start_date) & 
-            (df3_integrated['출고일자'].dt.date <= end_date)
+            (df3_integrated[date_col].dt.date >= start_date) & 
+            (df3_integrated[date_col].dt.date <= end_date)
         ]
 
 # 파트별 전체 현황 (df3 중심)
 st.header("📊 파트별 전체 현황 (df3 수리품목 기준)")
 
 # 파트별 통계 계산
-part_stats = df3_integrated.groupby('파트').agg({
+agg_dict = {
     '관리번호': 'count',
-    '수리비': ['sum', 'mean'],
-    '자재명': lambda x: ', '.join(x.dropna().astype(str).unique()[:3]) if '자재명' in df3_integrated.columns else ''
-}).round(2)
+    '수리비': ['sum', 'mean']
+}
+
+if '자재명' in df3_integrated.columns:
+    agg_dict['자재명'] = lambda x: ', '.join(x.dropna().astype(str).unique()[:3])
+
+part_stats = df3_integrated.groupby('파트').agg(agg_dict).round(2)
 
 # 컬럼명 정리
-part_stats.columns = ['출고건수', '총출고금액', '평균출고금액', '주요자재']
+if '자재명' in df3_integrated.columns:
+    part_stats.columns = ['출고건수', '총출고금액', '평균출고금액', '주요자재']
+else:
+    part_stats.columns = ['출고건수', '총출고금액', '평균출고금액']
+    part_stats['주요자재'] = ''
+
 part_stats = part_stats.reset_index()
 
 # 직급, 직책 정보 추가
-if '직급' in df3_integrated.columns:
-    part_position = df3_integrated.groupby('파트')['직급'].first().reset_index()
-    part_stats = pd.merge(part_stats, part_position, on='파트', how='left')
-
-if '직책' in df3_integrated.columns:
-    part_role = df3_integrated.groupby('파트')['직책'].first().reset_index()
-    part_stats = pd.merge(part_stats, part_role, on='파트', how='left')
+for info_col in ['직급', '직책']:
+    if info_col in df3_integrated.columns:
+        part_info = df3_integrated.groupby('파트')[info_col].first().reset_index()
+        part_stats = pd.merge(part_stats, part_info, on='파트', how='left')
 
 # 효율성 지표 추가
 part_stats['건당출고금액'] = part_stats['총출고금액'] / part_stats['출고건수']
@@ -279,7 +316,7 @@ with col1:
         orientation='h',
         color='총출고금액',
         color_continuous_scale='Reds',
-        title="파트별 총 출고금액 (df3 기준)"
+        title="파트별 총 출고금액"
     )
     fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
     st.plotly_chart(fig, use_container_width=True)
@@ -294,25 +331,24 @@ with col2:
         orientation='h',
         color='출고건수',
         color_continuous_scale='Blues',
-        title="파트별 출고건수 (df3 기준)"
+        title="파트별 출고건수"
     )
     fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
     st.plotly_chart(fig2, use_container_width=True)
 
 # 파트별 상세 통계 테이블
-st.subheader("📋 파트별 상세 통계 (df3 기준)")
+st.subheader("📋 파트별 상세 통계")
 
 # 컬럼 순서 정리
 display_columns = ['파트', '출고건수', '총출고금액', '건당출고금액']
 
-if '직급' in part_stats.columns:
-    display_columns.append('직급')
-if '직책' in part_stats.columns:
-    display_columns.append('직책')
+for col in ['직급', '직책']:
+    if col in part_stats.columns:
+        display_columns.append(col)
 
 display_columns.extend(['주요자재', '효율성점수'])
 
-display_stats = part_stats[display_columns]
+display_stats = part_stats[[col for col in display_columns if col in part_stats.columns]]
 
 # 포맷팅
 format_dict = {
@@ -329,8 +365,8 @@ st.dataframe(
 
 st.markdown("---")
 
-# 파트 선택 및 상세 분석 (df3 중심)
-st.header("🔍 파트별 상세 분석 (df3 수리품목 중심)")
+# 파트 선택 및 상세 분석
+st.header("🔍 파트별 상세 분석")
 
 available_parts = df3_integrated['파트'].dropna().unique()
 selected_parts = st.multiselect(
@@ -346,7 +382,7 @@ if selected_parts:
         
         part_data = df3_integrated[df3_integrated['파트'] == part]
         
-        st.subheader(f"🔧 {part} 파트 상세 분석 (df3 기준)")
+        st.subheader(f"🔧 {part} 파트 상세 분석")
         
         # 파트 KPI
         cols = st.columns(5)
@@ -372,27 +408,29 @@ if selected_parts:
             st.metric("관련 업체", f"{unique_clients}개")
         
         # 파트 정보 표시
-        if '직급' in part_data.columns or '직책' in part_data.columns:
+        info_cols = ['직급', '직책']
+        available_info = [col for col in info_cols if col in part_data.columns]
+        
+        if available_info:
             st.write("**👤 파트 정보**")
-            col1, col2 = st.columns(2)
+            info_col1, info_col2 = st.columns(2)
             
-            with col1:
-                if '직급' in part_data.columns:
+            with info_col1:
+                if '직급' in available_info:
                     position = part_data['직급'].iloc[0] if not part_data['직급'].isna().all() else "정보 없음"
                     st.write(f"• **직급**: {position}")
             
-            with col2:
-                if '직책' in part_data.columns:
+            with info_col2:
+                if '직책' in available_info:
                     role = part_data['직책'].iloc[0] if not part_data['직책'].isna().all() else "정보 없음"
                     st.write(f"• **직책**: {role}")
         
-        # 파트별 세부 분석 - 수정된 버전
+        # 파트별 세부 분석
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.write("**🔨 주요 작업 유형**")
             if '작업유형' in part_data.columns and part_data['작업유형'].notna().any():
-                # 작업유형에서 'nan' 및 빈 값 제거
                 valid_work_types = part_data['작업유형'].dropna()
                 valid_work_types = valid_work_types[valid_work_types != '미분류']
                 valid_work_types = valid_work_types[valid_work_types.str.strip() != '']
@@ -401,7 +439,6 @@ if selected_parts:
                     work_types = valid_work_types.value_counts().head(5)
                     for work, count in work_types.items():
                         percentage = (count / len(part_data) * 100)
-                        # 작업유형이 너무 길면 줄임
                         work_short = work[:30] + "..." if len(str(work)) > 30 else str(work)
                         st.write(f"• {work_short}: {count}건 ({percentage:.1f}%)")
                 else:
@@ -412,7 +449,6 @@ if selected_parts:
         with col2:
             st.write("**⚙️ 주요 정비 대상 (자재)**")
             if '자재명' in part_data.columns and part_data['자재명'].notna().any():
-                # 자재명에서 유효한 값만 추출
                 valid_materials = part_data['자재명'].dropna()
                 valid_materials = valid_materials[valid_materials.str.strip() != '']
                 
@@ -420,7 +456,6 @@ if selected_parts:
                     materials = valid_materials.value_counts().head(5)
                     for material, count in materials.items():
                         percentage = (count / len(part_data) * 100)
-                        # 자재명이 너무 길면 줄임
                         material_short = material[:25] + "..." if len(str(material)) > 25 else str(material)
                         st.write(f"• {material_short}: {count}건 ({percentage:.1f}%)")
                 else:
@@ -445,7 +480,7 @@ if selected_parts:
             else:
                 st.write("업체명 데이터 없음")
         
-        # 고액 출고 케이스
+        # 주의 케이스
         st.write("**🚨 주의 깊게 봐야 할 케이스들**")
         
         col1, col2 = st.columns(2)
@@ -463,7 +498,6 @@ if selected_parts:
                         자재명 = case.get('자재명', 'N/A')
                         출고금액 = case.get('수리비', 0)
                         
-                        # 자재명이 너무 길면 줄임
                         자재명_short = 자재명[:20] + "..." if len(str(자재명)) > 20 else str(자재명)
                         
                         st.write(f"• {관리번호} - {자재명_short}")
@@ -493,149 +527,60 @@ if selected_parts:
             else:
                 st.write("관리번호 데이터 없음")
 
-# 파트 간 비교 분석 (df3 중심)
-if len(selected_parts) > 1:
-    st.markdown("---")
-    st.header("⚖️ 선택된 파트 간 비교 (df3 기준)")
-    
-    comparison_data = []
-    for part in selected_parts:
-        part_data = df3_integrated[df3_integrated['파트'] == part]
-        
-        comparison_item = {
-            '파트': part,
-            '출고건수': len(part_data),
-            '총출고금액': part_data['수리비'].sum(),
-            '평균출고금액': part_data['수리비'].mean(),
-            '관련장비수': part_data['관리번호'].nunique(),
-            '관련업체수': part_data['업체명'].nunique() if '업체명' in part_data.columns else 0
-        }
-        
-        comparison_data.append(comparison_item)
-    
-    comparison_df = pd.DataFrame(comparison_data)
-    
-    # 비교 차트
-    cols = st.columns(3)
-    
-    with cols[0]:
-        fig = px.bar(
-            comparison_df,
-            x='파트',
-            y='총출고금액',
-            title="파트별 총 출고금액 비교",
-            color='총출고금액',
-            color_continuous_scale='Viridis'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with cols[1]:
-        fig = px.bar(
-            comparison_df,
-            x='파트',
-            y='평균출고금액',
-            title="파트별 평균 출고금액 비교",
-            color='평균출고금액',
-            color_continuous_scale='Plasma'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with cols[2]:
-        fig = px.bar(
-            comparison_df,
-            x='파트',
-            y='출고건수',
-            title="파트별 출고건수 비교",
-            color='출고건수',
-            color_continuous_scale='Blues'
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-# 파트 성과 랭킹 (df3 중심)
+# 데이터 다운로드
 st.markdown("---")
-st.header("🏆 파트 성과 랭킹 (df3 기준)")
-
-cols = st.columns(3)
-
-with cols[0]:
-    st.subheader("💰 출고금액 효율성 랭킹")
-    efficiency_ranking = part_stats.nsmallest(10, '건당출고금액')[['파트', '건당출고금액', '출고건수']]
-    
-    for idx, (_, row) in enumerate(efficiency_ranking.iterrows()):
-        medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-        st.write(f"{medal} **{row['파트']}**")
-        st.write(f"   건당 출고금액: {row['건당출고금액']:,.0f}원 ({row['출고건수']}건)")
-
-with cols[1]:
-    st.subheader("📊 출고량 랭킹")
-    volume_ranking = part_stats.nlargest(10, '출고건수')[['파트', '출고건수', '총출고금액']]
-    
-    for idx, (_, row) in enumerate(volume_ranking.iterrows()):
-        medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-        st.write(f"{medal} **{row['파트']}**")
-        st.write(f"   출고건수: {row['출고건수']:,}건 (총 {row['총출고금액']:,.0f}원)")
-
-with cols[2]:
-    st.subheader("💎 총 출고금액 랭킹")
-    cost_ranking = part_stats.nlargest(10, '총출고금액')[['파트', '총출고금액', '출고건수']]
-    
-    for idx, (_, row) in enumerate(cost_ranking.iterrows()):
-        medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-        st.write(f"{medal} **{row['파트']}**")
-        st.write(f"   총 출고금액: {row['총출고금액']:,.0f}원 ({row['출고건수']}건)")
-
-# 데이터 다운로드 - 엑셀 버전
-st.markdown("---")
-st.subheader("📥 분석 결과 다운로드 (df3 중심)")
+st.subheader("📥 분석 결과 다운로드")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
     # 파트별 통계 다운로드
-    excel_data = to_excel_download(part_stats, "df3_파트별_상세통계.xlsx")
+    excel_data = to_excel_download(part_stats, "파트별_상세통계.xlsx")
     st.download_button(
         label="📊 파트별 통계 다운로드 (Excel)",
         data=excel_data,
-        file_name="df3_파트별_상세통계.xlsx",
+        file_name="파트별_상세통계.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 with col2:
-    # df3 통합 데이터 다운로드
-    download_columns = ['파트', '관리번호', '출고일자', '수리비', '자재명', '직급', '직책', '작업유형']
+    # 통합 데이터 다운로드
+    download_columns = ['파트', '관리번호', '수리비', '작업유형']
+    if '자재명' in df3_integrated.columns:
+        download_columns.append('자재명')
     if '업체명' in df3_integrated.columns:
         download_columns.append('업체명')
     
     available_columns = [col for col in download_columns if col in df3_integrated.columns]
     detailed_data = df3_integrated[available_columns].copy()
-    detailed_excel = to_excel_download(detailed_data, "df3_통합_상세데이터.xlsx")
+    detailed_excel = to_excel_download(detailed_data, "통합_상세데이터.xlsx")
     st.download_button(
-        label="📄 df3 통합 상세 데이터 (Excel)",
+        label="📄 통합 상세 데이터 (Excel)",
         data=detailed_excel,
-        file_name="df3_통합_상세데이터.xlsx",
+        file_name="통합_상세데이터.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 with col3:
-    # 선택된 파트 상세 데이터
+    # 선택된 파트 데이터
     if selected_parts:
         selected_data = df3_integrated[df3_integrated['파트'].isin(selected_parts)]
-        selected_excel = to_excel_download(selected_data, "선택된_파트_상세데이터.xlsx")
+        selected_excel = to_excel_download(selected_data, "선택된_파트_데이터.xlsx")
         st.download_button(
             label="🎯 선택된 파트 데이터 (Excel)",
             data=selected_excel,
-            file_name="선택된_파트_상세데이터.xlsx",
+            file_name="선택된_파트_데이터.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# 디버깅 정보 (개발용)
+# 디버깅 정보
 if st.sidebar.checkbox("🔍 디버깅 정보 표시"):
     st.subheader("🔍 디버깅 정보")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.write("**df3_integrated 컬럼:**")
+        st.write("**데이터 컬럼:**")
         st.write(df3_integrated.columns.tolist())
         st.write(f"**데이터 형태:** {df3_integrated.shape}")
     
