@@ -1,4 +1,4 @@
- pages/01_경영_대시보드.py - 차트 오류 수정 버전
+# pages/01_경영_대시보드.py - 들여쓰기 수정 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -46,7 +46,7 @@ def load_and_process_df3():
         
         df4.columns = [str(col).strip().replace('\n', '') for col in df4.columns]
         
-        # df3와 조직도 매핑 (출고자 = 사번)
+        # df3와 조직도 매핑
         if '출고자' in df3.columns and '사번' in df4.columns and '파트' in df4.columns:
             df3['출고자'] = df3['출고자'].astype(str).str.strip()
             df4['사번'] = df4['사번'].astype(str).str.strip()
@@ -84,7 +84,6 @@ def load_and_process_df3():
 # 빠른 데이터 전처리
 @st.cache_data(show_spinner=False)
 def prepare_dashboard_data(df):
-    # 날짜 처리
     if '정비일자' in df.columns:
         df['정비일자'] = pd.to_datetime(df['정비일자'], errors='coerce')
         df = df.dropna(subset=['정비일자'])
@@ -92,7 +91,6 @@ def prepare_dashboard_data(df):
         df['년'] = df['정비일자'].dt.year
         df['월'] = df['정비일자'].dt.month
     
-    # 수리비 처리
     df['수리비'] = pd.to_numeric(df['수리비'], errors='coerce').fillna(0)
     
     return df
@@ -185,7 +183,6 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("📈 월별 트렌드 (최근 12개월)")
     
-    # 월별 데이터 집계
     recent_months = available_months[:12]
     monthly_data = df[df['년월'].isin(recent_months)].groupby('년월').agg({
         '수리비': 'sum',
@@ -197,7 +194,6 @@ with col1:
     if not monthly_data.empty:
         fig = go.Figure()
         
-        # 수리비 트렌드
         fig.add_trace(go.Scatter(
             x=monthly_data['년월_str'],
             y=monthly_data['수리비'],
@@ -207,7 +203,6 @@ with col1:
             yaxis='y'
         ))
         
-        # AS 건수 (보조축)
         fig.add_trace(go.Scatter(
             x=monthly_data['년월_str'],
             y=monthly_data['관리번호'],
@@ -238,10 +233,8 @@ with col2:
             for idx, (part, cost) in enumerate(df3_part_costs.items()):
                 icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
                 st.write(f"{icon} {part}: {cost:,.0f}원")
-        else:
-            st.write("**💰 df3 파트별 수리비 정보 없음**")
     else:
-        # df1 파트별 수리비 (백업)
+        # df1 백업
         if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
             part_costs = current_data[current_data['정비자소속'].notna()].groupby('정비자소속')['수리비'].sum().nlargest(5)
             
@@ -270,7 +263,7 @@ with col2:
                 client_short = str(client)[:15] + "..." if len(str(client)) > 15 else str(client)
                 st.write(f"{icon} {client_short}: {cost:,.0f}원")
 
-# 하단 상세 분석 - 4개 탭으로 확장
+# 하단 상세 분석
 st.header("📋 상세 분석")
 
 tab1, tab2, tab3, tab4 = st.tabs(["파트별", "업체별", "지역별", "고장유형별"])
@@ -371,7 +364,6 @@ with tab3:
             col1, col2 = st.columns(2)
             
             with col1:
-                # 지역별 분석
                 region_analysis = valid_region_data.groupby('지역').agg({
                     '관리번호': 'count',
                     '수리비': 'sum',
@@ -381,7 +373,6 @@ with tab3:
                 region_analysis['평균수리비'] = (region_analysis['수리비'] / region_analysis['건수']).round(0)
                 region_analysis = region_analysis.sort_values('수리비', ascending=False)
                 
-                # 지역별 건수 차트 - 수정된 버전
                 region_data_for_chart = region_analysis.reset_index()
                 
                 fig = px.bar(
@@ -396,7 +387,6 @@ with tab3:
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                # 지역별 수리비 차트 - 수정된 버전
                 fig = px.bar(
                     region_data_for_chart,
                     x='지역',
@@ -408,7 +398,6 @@ with tab3:
                 fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
             
-            # 지역별 상세 테이블
             st.dataframe(
                 region_analysis.style.format({
                     '수리비': '{:,.0f}원',
@@ -417,7 +406,6 @@ with tab3:
                 use_container_width=True
             )
             
-            # 지역별 효율성 분석
             st.write("**🎯 지역별 효율성 분석**")
             avg_cost_per_case = region_analysis['평균수리비'].mean()
             
@@ -449,9 +437,7 @@ with tab4:
         material_analysis['비율(%)'] = (material_analysis['건수'] / material_analysis['건수'].sum() * 100).round(1)
         material_analysis = material_analysis.sort_values('수리비', ascending=False).head(10)
         
-        # 자재별 수리비 차트 - 수정된 버전
         if not material_analysis.empty:
-            # 데이터프레임으로 변환하여 차트 생성
             chart_data = material_analysis.reset_index()
             chart_data['자재명_short'] = chart_data['자재명'].apply(
                 lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
@@ -469,7 +455,6 @@ with tab4:
             fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
             st.plotly_chart(fig, use_container_width=True)
             
-            # 상위 5개 자재 표시
             for idx, (material, row) in enumerate(material_analysis.head(5).iterrows()):
                 icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
                 material_short = str(material)[:25] + "..." if len(str(material)) > 25 else str(material)
@@ -496,7 +481,6 @@ with tab4:
                     fault_analysis['비율(%)'] = (fault_analysis['건수'] / fault_analysis['건수'].sum() * 100).round(1)
                     fault_analysis = fault_analysis.sort_values('총수리비', ascending=False).head(5)
                     
-                    # 상위 5개 표시
                     for idx, (fault_type, row) in enumerate(fault_analysis.iterrows()):
                         icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
                         fault_short = str(fault_type)[:15] + "..." if len(str(fault_type)) > 15 else str(fault_type)
