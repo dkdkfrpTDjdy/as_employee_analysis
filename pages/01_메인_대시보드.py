@@ -1,13 +1,32 @@
-# pages/01_경영_대시보드.py - 수정된 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from io import BytesIO
 
 st.set_page_config(page_title="경영 대시보드", layout="wide")
 st.title("📊 경영 대시보드")
+
+# 엑셀 다운로드 함수
+def to_excel_download(df, filename):
+    """DataFrame을 엑셀로 변환하여 다운로드 버튼 생성"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='데이터')
+    output.seek(0)
+    return output.getvalue()
+
+# 다중 시트 엑셀 다운로드 함수
+def to_excel_multi_sheet(data_dict, filename):
+    """여러 DataFrame을 다중 시트 엑셀로 변환"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name, df in data_dict.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output.getvalue()
 
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
@@ -15,6 +34,9 @@ if 'df1_with_costs' not in st.session_state:
     st.stop()
 
 df = st.session_state.df1_with_costs.copy()
+
+# df3 원본 데이터 확인
+df3_with_org = st.session_state.get('df3_with_org', None)
 
 # 빠른 데이터 전처리
 @st.cache_data(show_spinner=False)
@@ -102,6 +124,32 @@ with col4:
     unique_equipment = current_data['관리번호'].nunique()
     st.metric("수리 장비", f"{unique_equipment}대")
 
+# df3 기준 추가 KPI
+if df3_with_org is not None:
+    st.subheader("🔧 df3 수리품목 기준 지표")
+    
+    # 해당 월의 df3 데이터 필터링
+    df3_current = df3_with_org[df3_with_org['출고년월'] == selected_month] if '출고년월' in df3_with_org.columns else pd.DataFrame()
+    
+    if not df3_current.empty:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            df3_cases = len(df3_current)
+            st.metric("총 출고건수", f"{df3_cases:,}건")
+        
+        with col2:
+            df3_cost = df3_current['수리비'].sum() if '수리비' in df3_current.columns else 0
+            st.metric("총 출고금액", f"{df3_cost:,.0f}원")
+        
+        with col3:
+            df3_avg = df3_cost / df3_cases if df3_cases > 0 else 0
+            st.metric("건당 평균 출고금액", f"{df3_avg:,.0f}원")
+        
+        with col4:
+            df3_parts = df3_current['파트'].nunique() if '파트' in df3_current.columns else 0
+            st.metric("관련 파트", f"{df3_parts}개")
+
 # 알림
 if current_avg > df['수리비'].mean() * 1.3:
     st.error(f"⚠️ 이번 달 평균 수리비가 전체 평균보다 {((current_avg/df['수리비'].mean()-1)*100):.1f}% 높습니다!")
@@ -158,12 +206,12 @@ with col1:
 with col2:
     st.subheader("🚨 주요 이슈")
     
-    # 파트별 수리비 (상위 5개)
+    # 파트별 수리비 (상위 5개) - df1과 df3 통합 분석
     if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
         part_costs = current_data[current_data['정비자소속'].notna()].groupby('정비자소속')['수리비'].sum().nlargest(5)
         
         if not part_costs.empty:
-            st.write("**💰 수리비 상위 파트:**")
+            st.write("**💰 수리비 상위 파트 (df1 기준):**")
             for idx, (part, cost) in enumerate(part_costs.items()):
                 icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
                 st.write(f"{icon} {part}: {cost:,.0f}원")
@@ -171,6 +219,16 @@ with col2:
             st.write("**💰 파트별 수리비 정보 없음**")
     else:
         st.write("**💰 파트 정보 없음**")
+    
+    # df3 기준 파트별 출고금액 (상위 5개)
+    if df3_with_org is not None and not df3_current.empty and '파트' in df3_current.columns:
+        df3_part_costs = df3_current.groupby('파트')['수리비'].sum().nlargest(5)
+        
+        if not df3_part_costs.empty:
+            st.write("**🔧 출고금액 상위 파트 (df3 기준):**")
+            for idx, (part, cost) in enumerate(df3_part_costs.items()):
+                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
+                st.write(f"{icon} {part}: {cost:,.0f}원")
     
     # 업체별 수리비 (상위 5개)
     client_col = None
@@ -195,13 +253,13 @@ with col2:
     else:
         st.write("**🏢 업체 정보 없음**")
 
-# 하단 상세 분석 - 수정된 버전
+# 하단 상세 분석 - df3 정보 포함
 st.header("📋 상세 분석")
 
-tab1, tab2 = st.tabs(["파트별", "업체별"])
+tab1, tab2, tab3 = st.tabs(["파트별", "업체별", "df3 수리품목"])
 
 with tab1:
-    st.subheader("👥 파트별 분석")
+    st.subheader("👥 파트별 분석 (df1 기준)")
     
     if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
         # NaN 제거 후 분석
@@ -262,6 +320,42 @@ with tab2:
     else:
         st.info("업체 정보가 없습니다.")
 
+with tab3:
+    st.subheader("🔧 df3 수리품목 분석")
+    
+    if df3_with_org is not None and not df3_current.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # df3 파트별 분석
+            if '파트' in df3_current.columns:
+                df3_part_analysis = df3_current.groupby('파트').agg({
+                    '관리번호': 'count',
+                    '수리비': ['sum', 'mean']
+                })
+                df3_part_analysis.columns = ['출고건수', '총출고금액', '평균출고금액']
+                df3_part_analysis = df3_part_analysis.sort_values('총출고금액', ascending=False)
+                
+                st.write("**파트별 출고 현황:**")
+                st.dataframe(
+                    df3_part_analysis.style.format({
+                        '총출고금액': '{:,.0f}원',
+                        '평균출고금액': '{:,.0f}원'
+                    }),
+                    use_container_width=True
+                )
+        
+        with col2:
+            # df3 주요 자재 분석
+            if '자재명' in df3_current.columns:
+                material_analysis = df3_current['자재명'].value_counts().head(10)
+                
+                st.write("**주요 출고 자재 TOP 10:**")
+                for idx, (material, count) in enumerate(material_analysis.items()):
+                    st.write(f"{idx+1}. {material}: {count}건")
+    else:
+        st.info("df3 수리품목 데이터가 없습니다.")
+
 # 액션 아이템
 st.markdown("---")
 st.header("📋 액션 아이템")
@@ -277,8 +371,77 @@ if case_change > 30:
 if avg_change > 25:
     action_items.append(f"⚠️ **단가 상승**: 건당 평균 {avg_change:.1f}% 상승 → 수리 품질 점검")
 
+# df3 기준 액션 아이템 추가
+if df3_with_org is not None and not df3_current.empty:
+    df3_high_cost_parts = df3_current.groupby('파트')['수리비'].sum().nlargest(1)
+    if not df3_high_cost_parts.empty:
+        top_part = df3_high_cost_parts.index[0]
+        top_cost = df3_high_cost_parts.iloc[0]
+        action_items.append(f"🔧 **df3 고출고 파트**: {top_part} ({top_cost:,.0f}원) → 자재 사용량 점검")
+
 if not action_items:
     action_items.append("✅ 현재 특이사항 없음 - 정상 운영 중")
 
 for item in action_items:
     st.markdown(f"- {item}")
+
+# 데이터 다운로드 - 엑셀 버전
+st.markdown("---")
+st.subheader("📥 경영 대시보드 데이터 다운로드")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    # 현재 월 상세 데이터
+    excel_data = to_excel_download(current_data, f"{selected_month}_경영대시보드_상세데이터.xlsx")
+    st.download_button(
+        label="📄 현재 월 상세 데이터 (Excel)",
+        data=excel_data,
+        file_name=f"{selected_month}_경영대시보드_상세데이터.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+with col2:
+    # 월별 트렌드 데이터
+    if not monthly_data.empty:
+        trend_excel = to_excel_download(monthly_data, "월별_트렌드_데이터.xlsx")
+        st.download_button(
+            label="📈 월별 트렌드 데이터 (Excel)",
+            data=trend_excel,
+            file_name="월별_트렌드_데이터.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+with col3:
+    # 종합 대시보드 리포트 (다중 시트)
+    dashboard_data = {
+        '현재월_상세데이터': current_data,
+        '월별_트렌드': monthly_data if not monthly_data.empty else pd.DataFrame()
+    }
+    
+    # 파트별 분석 데이터 추가
+    if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
+        valid_part_data = current_data[current_data['정비자소속'].notna()]
+        if not valid_part_data.empty:
+            part_summary = valid_part_data.groupby('정비자소속').agg({
+                '관리번호': 'count',
+                '수리비': ['sum', 'mean']
+            })
+            part_summary.columns = ['건수', '총수리비', '평균수리비']
+            dashboard_data['파트별_분석'] = part_summary.reset_index()
+    
+    # df3 데이터 추가
+    if df3_with_org is not None and not df3_current.empty:
+        dashboard_data['df3_수리품목'] = df3_current
+    
+    # 빈 데이터프레임 제거
+    dashboard_data = {k: v for k, v in dashboard_data.items() if not v.empty}
+    
+    if dashboard_data:
+        multi_excel = to_excel_multi_sheet(dashboard_data, f"{selected_month}_경영대시보드_종합리포트.xlsx")
+        st.download_button(
+            label="📊 종합 대시보드 리포트 (Excel)",
+            data=multi_excel,
+            file_name=f"{selected_month}_경영대시보드_종합리포트.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
