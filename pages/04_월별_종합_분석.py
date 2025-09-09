@@ -4,36 +4,9 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import calendar
-from io import BytesIO
 
 st.set_page_config(page_title="월별 종합 분석", layout="wide")
 st.title("📅 월별 종합 분석")
-
-# 엑셀 다운로드 함수
-def to_excel_download(df, filename):
-    """DataFrame을 엑셀로 변환하여 다운로드 버튼 생성"""
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='데이터')
-    output.seek(0)
-    return output.getvalue()
-
-# 다중 시트 엑셀 다운로드 함수 (수정됨)
-def to_excel_multi_sheet(data_dict, filename):
-    """여러 DataFrame을 다중 시트 엑셀로 변환 - MultiIndex 컬럼 처리"""
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for sheet_name, df in data_dict.items():
-            # MultiIndex 컬럼을 단일 인덱스로 변환
-            if isinstance(df.columns, pd.MultiIndex):
-                # 컬럼명을 '_'로 연결하여 단일 인덱스로 변환
-                df_copy = df.copy()
-                df_copy.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df.columns]
-                df_copy.to_excel(writer, sheet_name=sheet_name, index=True)
-            else:
-                df.to_excel(writer, sheet_name=sheet_name, index=True)
-    output.seek(0)
-    return output.getvalue()
 
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
@@ -41,9 +14,6 @@ if 'df1_with_costs' not in st.session_state:
     st.stop()
 
 df = st.session_state.df1_with_costs.copy()
-
-# df3 원본 데이터 확인
-df3_with_org = st.session_state.get('df3_with_org', None)
 
 # 데이터 전처리
 @st.cache_data(show_spinner=False)
@@ -82,7 +52,7 @@ available_months = list(range(1, 13))
 
 selected_year = st.sidebar.selectbox("분석 년도", available_years)
 selected_month = st.sidebar.selectbox(
-    "분석 월",
+    "분석 월", 
     available_months,
     format_func=lambda x: f"{x}월"
 )
@@ -169,40 +139,6 @@ with col4:
 with col5:
     unique_equipment = filtered_df['관리번호'].nunique()
     st.metric("수리 장비", f"{unique_equipment}대")
-
-# df3 기준 추가 KPI
-if df3_with_org is not None:
-    # 해당 월의 df3 데이터 필터링
-    if '출고일자' in df3_with_org.columns:
-        df3_with_org['출고일자'] = pd.to_datetime(df3_with_org['출고일자'], errors='coerce')
-        df3_with_org['출고년'] = df3_with_org['출고일자'].dt.year
-        df3_with_org['출고월'] = df3_with_org['출고일자'].dt.month
-        
-        df3_current = df3_with_org[
-            (df3_with_org['출고년'] == selected_year) & 
-            (df3_with_org['출고월'] == selected_month)
-        ]
-        
-        if not df3_current.empty:
-            st.subheader("🔧 df3 수리품목 기준 지표")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                df3_cases = len(df3_current)
-                st.metric("총 출고건수", f"{df3_cases:,}건")
-            
-            with col2:
-                df3_cost = df3_current['수리비'].sum() if '수리비' in df3_current.columns else 0
-                st.metric("총 출고금액", f"{df3_cost:,.0f}원")
-            
-            with col3:
-                df3_avg = df3_cost / df3_cases if df3_cases > 0 else 0
-                st.metric("건당 평균 출고금액", f"{df3_avg:,.0f}원")
-            
-            with col4:
-                df3_parts = df3_current['파트'].nunique() if '파트' in df3_current.columns else 0
-                st.metric("관련 파트", f"{df3_parts}개")
 
 # 알림
 if avg_cost_per_case > df['수리비'].mean() * 1.5:
@@ -472,98 +408,38 @@ with col2:
     if compare_month and cost_change > 30:
         issues.append(f"💰 전월 대비 총 수리비 {cost_change:.1f}% 증가")
     
-    # df3 기준 이슈 추가
-    if df3_with_org is not None and 'df3_current' in locals() and not df3_current.empty:
-        if '파트' in df3_current.columns:
-            df3_part_costs = df3_current.groupby('파트')['수리비'].sum()
-            if len(df3_part_costs) > 0:
-                top_df3_part = df3_part_costs.idxmax()
-                top_df3_amount = df3_part_costs.max()
-                issues.append(f"🔧 **{top_df3_part}** 파트 출고금액 최고 ({top_df3_amount:,.0f}원)")
-    
     if not issues:
         issues.append("✅ 특별한 이슈 없음")
     
     for issue in issues:
         st.write(f"• {issue}")
 
-# 데이터 다운로드 - 엑셀 버전 (수정됨)
+# 데이터 다운로드
 st.markdown("---")
 st.subheader("📥 리포트 다운로드")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
-    # 상세 데이터 다운로드
-    excel_data = to_excel_download(filtered_df, f"{selected_year}년{selected_month}월_AS상세데이터.xlsx")
+    csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
     st.download_button(
-        label="📄 상세 데이터 다운로드 (Excel)",
-        data=excel_data,
-        file_name=f"{selected_year}년{selected_month}월_AS상세데이터.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        label="📄 상세 데이터 다운로드 (CSV)",
+        data=csv_data,
+        file_name=f"{selected_year}년{selected_month}월_AS상세데이터.csv",
+        mime="text/csv"
     )
 
 with col2:
-    # 파트별 요약 다운로드
     if '정비자소속' in filtered_df.columns and not filtered_df.empty:
-        # MultiIndex 문제 해결을 위해 단순한 집계 사용
         summary_data = filtered_df.groupby('정비자소속').agg({
             '관리번호': 'count',
             '수리비': 'sum'
-        })
-        summary_data.columns = ['건수', '총수리비']  # 컬럼명 직접 지정
-        summary_data['평균수리비'] = (summary_data['총수리비'] / summary_data['건수']).round(0)
+        }).rename(columns={'관리번호': '건수'})
         
-        summary_excel = to_excel_download(summary_data.reset_index(), f"{selected_year}년{selected_month}월_파트별요약.xlsx")
+        summary_csv = summary_data.to_csv(encoding='utf-8-sig')
         st.download_button(
-            label="📊 파트별 요약 (Excel)",
-            data=summary_excel,
-            file_name=f"{selected_year}년{selected_month}월_파트별요약.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="📊 파트별 요약 (CSV)",
+            data=summary_csv,
+            file_name=f"{selected_year}년{selected_month}월_파트별요약.csv",
+            mime="text/csv"
         )
-
-with col3:
-    # 종합 리포트 다운로드 (다중 시트) - MultiIndex 문제 해결
-    if '정비자소속' in filtered_df.columns:
-        # 파트별 분석 (단순 집계)
-        part_summary = filtered_df.groupby('정비자소속').agg({
-            '관리번호': 'count',
-            '수리비': 'sum'
-        })
-        part_summary.columns = ['건수', '총수리비']
-        part_summary['평균수리비'] = (part_summary['총수리비'] / part_summary['건수']).round(0)
-        
-        # 업체별 분석 (단순 집계)
-        client_summary = pd.DataFrame()
-        if client_col in filtered_df.columns:
-            client_summary = filtered_df.groupby(client_col).agg({
-                '관리번호': 'count',
-                '수리비': 'sum'
-            })
-            client_summary.columns = ['건수', '총수리비']
-            client_summary['평균수리비'] = (client_summary['총수리비'] / client_summary['건수']).round(0)
-        
-        # 여러 분석 결과를 하나의 엑셀 파일로
-        report_data = {
-            '상세데이터': filtered_df,
-            '파트별분석': part_summary.reset_index()
-        }
-        
-        if not client_summary.empty:
-            report_data['업체별분석'] = client_summary.reset_index()
-        
-        # df3 데이터 추가
-        if df3_with_org is not None and 'df3_current' in locals() and not df3_current.empty:
-            report_data['df3_수리품목'] = df3_current
-        
-        # 빈 데이터프레임 제거
-        report_data = {k: v for k, v in report_data.items() if not v.empty}
-        
-        if report_data:
-            multi_excel = to_excel_multi_sheet(report_data, f"{selected_year}년{selected_month}월_종합리포트.xlsx")
-            st.download_button(
-                label="📋 종합 리포트 (Excel)",
-                data=multi_excel,
-                file_name=f"{selected_year}년{selected_month}월_종합리포트.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
