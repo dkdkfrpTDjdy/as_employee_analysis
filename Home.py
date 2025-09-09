@@ -105,175 +105,256 @@ def load_static_data():
     
     return df2, df4
 
-# df3와 df1 매핑 강화 함수 (출고자-조직도 매핑 포함)
+# df3 조직도 매핑 함수 (수정됨)
 @st.cache_data
-def enhanced_merge_df3_with_org(df1, df3, df4):
-    """df3를 조직도와 매핑하고 df1과 통합하는 강화된 함수"""
+def create_df3_with_organization(df3, df4):
+    """df3를 조직도와 매핑하여 파트 정보 추가"""
     
-    if df1 is None or df3 is None:
-        return df1
+    if df3 is None:
+        return None
     
     try:
-        st.write("### 🔍 df3 수리품목 데이터 매핑 (조직도 연동)")
+        st.write("### 🔍 df3 + 조직도 매핑")
         
-        df1_temp = df1.copy()
-        df3_temp = df3.copy()
+        df3_processed = df3.copy()
         
-        # df3에 조직도 정보 매핑 (출고자 기준)
-        if df4 is not None and '출고자' in df3_temp.columns:
-            # 출고자를 사번으로 간주하여 조직도와 매핑
-            df3_temp['출고자'] = df3_temp['출고자'].astype(str).str.strip()
-            df4_temp = df4.copy()
-            df4_temp['사번'] = df4_temp['사번'].astype(str).str.strip()
-            
-            # 조직도 매핑
-            org_mapping = df4_temp[['사번', '파트', '직급', '직책']].dropna(subset=['사번'])
-            df3_with_org = pd.merge(
-                df3_temp,
-                org_mapping,
-                left_on='출고자',
-                right_on='사번',
-                how='left'
-            )
-            
-            mapped_count = df3_with_org['파트'].notna().sum()
-            st.write(f"**조직도 매핑 결과: {mapped_count}건 매핑됨**")
-            
-        else:
-            df3_with_org = df3_temp.copy()
-            st.write("**조직도 매핑 불가 (출고자 또는 조직도 데이터 없음)**")
+        # 기본 전처리
+        if '관리번호' in df3_processed.columns:
+            df3_processed['관리번호'] = df3_processed['관리번호'].astype(str).str.strip()
         
-        # df1 전처리
-        df1_temp['관리번호'] = df1_temp['관리번호'].astype(str).str.strip()
-        df1_temp['정비일자'] = pd.to_datetime(df1_temp['정비일자'], errors='coerce')
-        df1_temp['정비년월'] = df1_temp['정비일자'].dt.to_period('M')
+        if '출고일자' in df3_processed.columns:
+            df3_processed['출고일자'] = pd.to_datetime(df3_processed['출고일자'], errors='coerce')
+            df3_processed['출고년'] = df3_processed['출고일자'].dt.year
+            df3_processed['출고월'] = df3_processed['출고일자'].dt.month
+            df3_processed['출고년월'] = df3_processed['출고일자'].dt.to_period('M')
         
-        # df3 전처리
-        df3_with_org['관리번호'] = df3_with_org['관리번호'].astype(str).str.strip()
-        df3_with_org['출고일자'] = pd.to_datetime(df3_with_org['출고일자'], errors='coerce')
-        df3_with_org['출고년월'] = df3_with_org['출고일자'].dt.to_period('M')
-        
-        # 수리비 컬럼 처리
+        # 수리비 처리
         cost_col = None
         for col in ['출고금액', '금액', '단가', '수리비']:
-            if col in df3_with_org.columns:
+            if col in df3_processed.columns:
                 cost_col = col
                 break
         
         if cost_col:
-            df3_with_org['수리비'] = pd.to_numeric(df3_with_org[cost_col], errors='coerce').fillna(0)
+            df3_processed['수리비'] = pd.to_numeric(df3_processed[cost_col], errors='coerce').fillna(0)
+            st.write(f"✅ 수리비 컬럼 처리 완료 (기준: {cost_col})")
+        else:
+            df3_processed['수리비'] = 0
+            st.warning("⚠️ 수리비 관련 컬럼을 찾을 수 없습니다.")
+        
+        # 조직도 매핑 (출고자 = 사번)
+        if df4 is not None and '출고자' in df3_processed.columns:
+            st.write("**출고자-조직도 매핑 시도**")
             
-            # 관리번호 + 년월 기준으로 집계
-            cost_summary = df3_with_org.groupby(['관리번호', '출고년월']).agg({
-                '수리비': 'sum',
-                '자재명': lambda x: ', '.join(x.dropna().astype(str).unique()[:3]),
-                '파트': 'first',  # 파트 정보 추가
-                '직급': 'first',  # 직급 정보 추가
-                '직책': 'first'   # 직책 정보 추가
-            }).reset_index()
+            # 출고자를 사번으로 간주하여 매핑
+            df3_processed['출고자'] = df3_processed['출고자'].astype(str).str.strip()
+            df4_clean = df4.copy()
             
-            cost_summary.columns = ['관리번호', '년월', '수리비', '사용부품', '수리담당파트', '수리담당직급', '수리담당직책']
+            # 조직도 컬럼 확인
+            st.write(f"조직도 컬럼: {df4_clean.columns.tolist()}")
             
-            # df1과 매핑
-            result = pd.merge(
-                df1_temp,
-                cost_summary,
-                left_on=['관리번호', '정비년월'],
-                right_on=['관리번호', '년월'],
+            required_cols = ['사번', '파트']
+            available_cols = [col for col in required_cols if col in df4_clean.columns]
+            
+            if len(available_cols) == 2:  # 사번, 파트 모두 있음
+                df4_clean['사번'] = df4_clean['사번'].astype(str).str.strip()
+                
+                # 조직도 매핑 정보 준비
+                org_cols = ['사번', '파트']
+                if '직급' in df4_clean.columns:
+                    org_cols.append('직급')
+                if '직책' in df4_clean.columns:
+                    org_cols.append('직책')
+                
+                org_mapping = df4_clean[org_cols].dropna(subset=['사번', '파트'])
+                
+                st.write(f"매핑 가능한 조직도 레코드: {len(org_mapping)}건")
+                
+                # 출고자 현황 확인
+                df3_workers = df3_processed['출고자'].value_counts().head(10)
+                st.write("**df3 출고자 현황:**")
+                for worker, count in df3_workers.items():
+                    st.write(f"  - {worker}: {count}건")
+                
+                # 조직도 사번 현황 확인
+                org_workers = org_mapping['사번'].value_counts().head(10)
+                st.write("**조직도 사번 현황:**")
+                for worker, count in org_workers.items():
+                    st.write(f"  - {worker}: {count}건")
+                
+                # 매핑 수행
+                df3_processed = pd.merge(
+                    df3_processed,
+                    org_mapping,
+                    left_on='출고자',
+                    right_on='사번',
+                    how='left'
+                )
+                
+                # 매핑 결과 확인
+                mapped_count = df3_processed['파트'].notna().sum()
+                mapping_rate = (mapped_count / len(df3_processed) * 100) if len(df3_processed) > 0 else 0
+                
+                st.write(f"**조직도 매핑 결과: {mapped_count}건 ({mapping_rate:.1f}%)**")
+                
+                # 매핑되지 않은 경우 출고자를 파트로 사용
+                unmapped_mask = df3_processed['파트'].isna()
+                if unmapped_mask.any():
+                    df3_processed.loc[unmapped_mask, '파트'] = df3_processed.loc[unmapped_mask, '출고자']
+                    st.info(f"매핑되지 않은 {unmapped_mask.sum()}건은 출고자를 파트명으로 사용합니다.")
+                
+                # 중복 사번 컬럼 제거
+                if '사번' in df3_processed.columns:
+                    df3_processed = df3_processed.drop('사번', axis=1)
+                    
+            else:
+                st.error(f"조직도에 필요한 컬럼이 없습니다. 필요: {required_cols}, 있음: {available_cols}")
+                # 출고자를 파트로 사용
+                df3_processed['파트'] = df3_processed.get('출고자', '미분류')
+                df3_processed['직급'] = '정보없음'
+                df3_processed['직책'] = '정보없음'
+        else:
+            # 조직도가 없거나 출고자 컬럼이 없는 경우
+            if '출고자' in df3_processed.columns:
+                df3_processed['파트'] = df3_processed['출고자']
+                st.info("조직도 없음. 출고자를 파트로 사용합니다.")
+            else:
+                df3_processed['파트'] = '미분류'
+                st.warning("출고자 컬럼이 없습니다. 미분류로 처리합니다.")
+        
+        return df3_processed
+        
+    except Exception as e:
+        st.error(f"df3 조직도 매핑 오류: {e}")
+        return df3
+
+# df3와 df1 매핑 함수 (업체명 가져오기)
+@st.cache_data
+def merge_df3_with_df1_client_info(df3_with_org, df1):
+    """df3에 df1의 업체명 정보 매핑"""
+    
+    if df3_with_org is None or df1 is None:
+        return df3_with_org
+    
+    try:
+        st.write("### 🔍 df3 + df1 업체명 매핑")
+        
+        df3_temp = df3_with_org.copy()
+        df1_temp = df1.copy()
+        
+        # df1 전처리
+        df1_temp['관리번호'] = df1_temp['관리번호'].astype(str).str.strip()
+        df1_temp['정비일자'] = pd.to_datetime(df1_temp['정비일자'], errors='coerce')
+        df1_temp['정비년'] = df1_temp['정비일자'].dt.year
+        df1_temp['정비월'] = df1_temp['정비일자'].dt.month
+        df1_temp['정비년월'] = df1_temp['정비일자'].dt.to_period('M')
+        
+        # 대분류/중분류/소분류 합쳐서 작업유형 생성
+        work_type_parts = []
+        for col in ['대분류', '중분류', '소분류']:
+            if col in df1_temp.columns:
+                work_type_parts.append(df1_temp[col].astype(str))
+        
+        if work_type_parts:
+            df1_temp['작업유형_통합'] = work_type_parts[0]
+            for part in work_type_parts[1:]:
+                df1_temp['작업유형_통합'] = df1_temp['작업유형_통합'] + ' > ' + part
+            
+            # 'nan' 제거 및 정리
+            df1_temp['작업유형_통합'] = df1_temp['작업유형_통합'].str.replace('nan', '').str.replace(' > ', ' > ').str.strip(' > ')
+            df1_temp['작업유형_통합'] = df1_temp['작업유형_통합'].replace('', '미분류')
+            st.write("✅ df1 작업유형 통합 완료")
+        
+        # 업체명 컬럼 찾기
+        client_col = None
+        for col in ['현장명', '업체명', '현장']:
+            if col in df1_temp.columns:
+                client_col = col
+                break
+        
+        if client_col:
+            st.write(f"**업체명 컬럼 발견: {client_col}**")
+            
+            # 매핑할 정보 준비
+            mapping_cols = ['관리번호', '정비년월', client_col]
+            if '작업유형_통합' in df1_temp.columns:
+                mapping_cols.append('작업유형_통합')
+            
+            # 중복 제거
+            df1_mapping = df1_temp[mapping_cols].drop_duplicates()
+            
+            st.write(f"df1 매핑 데이터: {len(df1_mapping)}건")
+            
+            # 년월 + 관리번호 기준 매핑
+            df3_final = pd.merge(
+                df3_temp,
+                df1_mapping,
+                left_on=['관리번호', '출고년월'],
+                right_on=['관리번호', '정비년월'],
                 how='left'
             )
             
             # 매핑되지 않은 경우 관리번호만으로 재시도
-            unmapped_mask = result['수리비'].isna() | (result['수리비'] == 0)
+            unmapped_mask = df3_final[client_col].isna()
             if unmapped_mask.any():
-                avg_cost_by_equipment = df3_with_org.groupby('관리번호').agg({
-                    '수리비': 'mean',
-                    '파트': 'first',
-                    '직급': 'first',
-                    '직책': 'first'
-                }).reset_index()
-                avg_cost_by_equipment.columns = ['관리번호', '평균수리비', '평균수리담당파트', '평균수리담당직급', '평균수리담당직책']
+                st.write(f"년월 매핑 실패: {unmapped_mask.sum()}건 → 관리번호만으로 재시도")
                 
-                result = pd.merge(result, avg_cost_by_equipment, on='관리번호', how='left')
+                # 관리번호만으로 매핑
+                simple_mapping_cols = ['관리번호', client_col]
+                if '작업유형_통합' in df1_temp.columns:
+                    simple_mapping_cols.append('작업유형_통합')
                 
-                # 매핑되지 않은 항목에 평균값 적용
-                for col_pair in [('수리비', '평균수리비'), ('수리담당파트', '평균수리담당파트'), 
-                               ('수리담당직급', '평균수리담당직급'), ('수리담당직책', '평균수리담당직책')]:
-                    original_col, avg_col = col_pair
-                    if avg_col in result.columns:
-                        mask = unmapped_mask & result[avg_col].notna()
-                        if original_col == '수리비':
-                            result.loc[mask, original_col] = result.loc[mask, avg_col]
-                        else:
-                            result.loc[result[original_col].isna() & result[avg_col].notna(), original_col] = \
-                                result.loc[result[original_col].isna() & result[avg_col].notna(), avg_col]
+                df1_simple_mapping = df1_temp[simple_mapping_cols].drop_duplicates().groupby('관리번호').first().reset_index()
                 
-                # 임시 컬럼 제거
-                avg_cols = [col for col in result.columns if col.startswith('평균수리')]
-                result = result.drop(avg_cols, axis=1)
+                # 매핑되지 않은 항목에 대해 관리번호 기준으로 매핑
+                for idx, row in df3_final[unmapped_mask].iterrows():
+                    matching_rows = df1_simple_mapping[df1_simple_mapping['관리번호'] == row['관리번호']]
+                    if not matching_rows.empty:
+                        for col in simple_mapping_cols[1:]:  # 관리번호 제외
+                            df3_final.loc[idx, col] = matching_rows.iloc[0][col]
+            
+            # 컬럼명 통일
+            df3_final['업체명'] = df3_final[client_col]
+            if '작업유형_통합' in df3_final.columns:
+                df3_final['작업유형'] = df3_final['작업유형_통합']
             
             # 임시 컬럼 제거
-            if '년월' in result.columns:
-                result = result.drop('년월', axis=1)
-            if '정비년월' in result.columns:
-                result = result.drop('정비년월', axis=1)
+            cleanup_cols = ['정비년월']
+            if client_col != '업체명':
+                cleanup_cols.append(client_col)
+            if '작업유형_통합' in df3_final.columns:
+                cleanup_cols.append('작업유형_통합')
             
-            # 매핑 결과
-            mapped_count = (result['수리비'] > 0).sum()
-            mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
+            for col in cleanup_cols:
+                if col in df3_final.columns:
+                    df3_final = df3_final.drop(col, axis=1)
             
-            st.write(f"**수리비 매핑 결과: {mapped_count}건 ({mapping_rate:.1f}%)**")
-            st.write(f"**총 수리비: {result['수리비'].sum():,.0f}원**")
+            # 매핑 결과 확인
+            mapped_clients = df3_final['업체명'].notna().sum()
+            client_mapping_rate = (mapped_clients / len(df3_final) * 100) if len(df3_final) > 0 else 0
             
-            # df3 원본을 세션에 저장 (조직도 매핑된 버전)
-            st.session_state.df3_with_org = df3_with_org
+            st.write(f"**업체명 매핑 결과: {mapped_clients}건 ({client_mapping_rate:.1f}%)**")
             
-            return result
+            if '작업유형' in df3_final.columns:
+                mapped_work_types = df3_final['작업유형'].notna().sum()
+                st.write(f"**작업유형 매핑 결과: {mapped_work_types}건**")
+            
+            return df3_final
         else:
-            st.warning("df3에서 수리비 관련 컬럼을 찾을 수 없습니다.")
-            df1_temp['수리비'] = 0
-            return df1_temp
+            st.warning("df1에서 업체명 관련 컬럼을 찾을 수 없습니다.")
+            return df3_temp
             
     except Exception as e:
-        st.error(f"df3 매핑 오류: {e}")
-        df1['수리비'] = 0
-        return df1
+        st.error(f"df3-df1 매핑 오류: {e}")
+        return df3_with_org
 
-# 만족도 데이터와 조직도 매핑 함수
+# df1 기본 처리 함수
 @st.cache_data
-def merge_satisfaction_by_employee_id(satisfaction_df, org_df):
-    """만족도 데이터를 사번 기준으로 조직도와 매핑"""
-    if satisfaction_df is None or org_df is None:
-        return satisfaction_df
+def process_df1_basic(df1, df2, df4):
+    """df1 기본 처리 (자산정보, 조직도 매핑)"""
     
-    try:
-        df5 = satisfaction_df.copy()
-        org_temp = org_df.copy()
-        
-        # 사번을 문자열로 통일
-        df5['사번'] = df5['사번'].astype(str).str.strip()
-        org_temp['사번'] = org_temp['사번'].astype(str).str.strip()
-        
-        # 조직도에서 사번-파트 매핑 정보 추출
-        org_mapping = org_temp[['사번', '파트', '이름', '직급', '직책']].dropna()
-        
-        # 만족도 데이터와 조직도 매핑
-        df5_with_part = pd.merge(
-            df5,
-            org_mapping,
-            on='사번',
-            how='left'
-        )
-        
-        return df5_with_part
-        
-    except Exception as e:
-        return satisfaction_df
-
-# 통합 머지 함수 - df3 중심 강화 버전
-@st.cache_data
-def comprehensive_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
-    """모든 데이터를 df1에 머지 - df3 중심 강화 버전"""
+    if df1 is None:
+        return None
     
     result = df1.copy()
     
@@ -285,13 +366,7 @@ def comprehensive_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
         result['정비일자'] = pd.to_datetime(result['정비일자'], errors='coerce')
         result['년월'] = result['정비일자'].dt.to_period('M')
     
-    # 2. df3 수리비 매핑 (조직도 연동 강화)
-    if df3 is not None:
-        result = enhanced_merge_df3_with_org(result, df3, df4)
-    else:
-        result['수리비'] = 0
-    
-    # 3. 자산 데이터 머지 (df2)
+    # 2. 자산 데이터 머지 (df2)
     if df2 is not None and '관리번호' in df2.columns:
         try:
             asset_cols = ['관리번호']
@@ -325,7 +400,7 @@ def comprehensive_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
     else:
         result['브랜드'] = result['브랜드'].fillna('기타')
     
-    # 4. 조직도 데이터로 정비자 소속 매핑 (df4)
+    # 3. 조직도 데이터로 정비자 소속 매핑 (df4)
     if df4 is not None:
         df4_clean = df4.copy()
         
@@ -371,25 +446,7 @@ def comprehensive_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
     else:
         result['정비자소속'] = '미분류'
     
-    # 5. 만족도 데이터 매핑 (df5)
-    if df5 is not None and '관리번호' in df5.columns:
-        try:
-            df5['관리번호'] = df5['관리번호'].astype(str)
-            
-            if '답변' in df5.columns:
-                df5['만족도점수'] = pd.to_numeric(df5['답변'], errors='coerce')
-                
-                satisfaction_summary = df5.groupby('관리번호')['만족도점수'].agg([
-                    'mean', 'count'
-                ]).reset_index()
-                satisfaction_summary.columns = ['관리번호', '만족도_평균', '만족도_응답수']
-                
-                result = pd.merge(result, satisfaction_summary, on='관리번호', how='left')
-            
-        except Exception as e:
-            pass
-    
-    # 6. 지역 정보 추출 강화
+    # 4. 지역 정보 추출
     if '현장' in result.columns:
         def extract_region_enhanced(address):
             if not isinstance(address, str):
@@ -425,28 +482,38 @@ def comprehensive_merge_all(df1, df2=None, df3=None, df4=None, df5=None):
         result['지역'] = result['현장'].apply(extract_region_enhanced)
         result['현장명'] = result['현장']
     
-    # 7. 필요한 컬럼만 유지
-    keep_columns = [
-        '관리번호', '정비일자', '년월', '정비자', '정비자소속', '정비자직급', '정비자직책',
-        '브랜드', '모델명', '수리비', '작업유형', '정비대상', '정비작업',
-        '현장명', '지역', '수리시간', '가동시간', '수리담당파트', '수리담당직급', '수리담당직책'
-    ]
-    
-    if '사용부품' in result.columns:
-        keep_columns.append('사용부품')
-    if '만족도_평균' in result.columns:
-        keep_columns.extend(['만족도_평균', '만족도_응답수'])
-    if '업체명' in result.columns:
-        keep_columns.append('업체명')
-    
-    final_columns = [col for col in keep_columns if col in result.columns]
-    result = result[final_columns]
-    
-    # 8. AWP 파트 제외 처리
-    if '정비자소속' in result.columns:
-        result = result[~result['정비자소속'].str.contains('AWP', case=False, na=False)]
-    
     return result
+
+# 만족도 데이터와 조직도 매핑 함수
+@st.cache_data
+def merge_satisfaction_by_employee_id(satisfaction_df, org_df):
+    """만족도 데이터를 사번 기준으로 조직도와 매핑"""
+    if satisfaction_df is None or org_df is None:
+        return satisfaction_df
+    
+    try:
+        df5 = satisfaction_df.copy()
+        org_temp = org_df.copy()
+        
+        # 사번을 문자열로 통일
+        df5['사번'] = df5['사번'].astype(str).str.strip()
+        org_temp['사번'] = org_temp['사번'].astype(str).str.strip()
+        
+        # 조직도에서 사번-파트 매핑 정보 추출
+        org_mapping = org_temp[['사번', '파트', '이름', '직급', '직책']].dropna()
+        
+        # 만족도 데이터와 조직도 매핑
+        df5_with_part = pd.merge(
+            df5,
+            org_mapping,
+            on='사번',
+            how='left'
+        )
+        
+        return df5_with_part
+        
+    except Exception as e:
+        return satisfaction_df
 
 # 사이드바
 st.sidebar.title("📁 데이터 업로드")
@@ -472,45 +539,59 @@ if uploaded_file1 is not None:
             df5 = load_excel_simple(uploaded_file5) if uploaded_file5 else None
             
             if df1 is not None:
-                # 만족도 데이터 전처리 및 조직도 매핑
+                # 1. df3 조직도 매핑
+                df3_with_org = None
+                if df3 is not None:
+                    df3_with_org = create_df3_with_organization(df3, df4)
+                    if df3_with_org is not None:
+                        st.session_state.df3_with_org = df3_with_org
+                
+                # 2. df3에 df1 업체명 정보 매핑
+                if df3_with_org is not None:
+                    df3_final = merge_df3_with_df1_client_info(df3_with_org, df1)
+                    if df3_final is not None:
+                        st.session_state.df3_final = df3_final
+                
+                # 3. df1 기본 처리
+                df1_processed = process_df1_basic(df1, df2, df4)
+                if df1_processed is not None:
+                    st.session_state.df1_with_costs = df1_processed
+                
+                # 4. 만족도 데이터 처리
                 if df5 is not None and df4 is not None:
-                    # 만족도 데이터 전처리
                     if '답변' in df5.columns:
                         df5['만족도점수'] = pd.to_numeric(df5['답변'], errors='coerce')
                     
-                    # 조직도와 매핑 (사번 기준)
                     df5_with_part = merge_satisfaction_by_employee_id(df5, df4)
-                    
-                    # 세션에 저장
                     st.session_state.satisfaction_data = df5_with_part
                 
-                # 통합 데이터 생성 (df3 중심 강화)
-                final_data = comprehensive_merge_all(df1, df2, df3, df4, df5)
+                st.session_state.data_loaded = True
+                st.success("✅ 데이터 처리 완료")
                 
-                if final_data is not None:
-                    # 세션에 저장
-                    st.session_state.df1_with_costs = final_data
-                    st.session_state.data_loaded = True
-                    
-                    st.success("✅ 데이터 처리 완료")
-                    
-                    # 데이터 미리보기
-                    st.subheader("📊 통합 데이터 미리보기")
-                    st.write(f"총 {len(final_data)}건의 AS 데이터")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("총 수리비", f"{final_data['수리비'].sum():,.0f}원")
-                    with col2:
-                        st.metric("파트 수", f"{final_data['정비자소속'].nunique()}개")
-                    with col3:
-                        st.metric("지역 수", f"{final_data['지역'].nunique() if '지역' in final_data.columns else 0}개")
-                    with col4:
-                        st.metric("장비 수", f"{final_data['관리번호'].nunique()}대")
-                    
-                    st.dataframe(final_data.head(10), use_container_width=True)
-                else:
-                    st.error("데이터 통합에 실패했습니다.")
+                # 데이터 미리보기
+                st.subheader("📊 처리된 데이터 현황")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**df1 처리 결과:**")
+                    if df1_processed is not None:
+                        st.write(f"- 총 건수: {len(df1_processed):,}건")
+                        st.write(f"- 총 수리비: {df1_processed.get('수리비', pd.Series([0])).sum():,.0f}원")
+                        st.write(f"- 파트 수: {df1_processed['정비자소속'].nunique()}개")
+                
+                with col2:
+                    st.write("**df3 처리 결과:**")
+                    if 'df3_final' in st.session_state:
+                        df3_final = st.session_state['df3_final']
+                        st.write(f"- 총 건수: {len(df3_final):,}건")
+                        st.write(f"- 총 출고금액: {df3_final['수리비'].sum():,.0f}원")
+                        st.write(f"- 파트 수: {df3_final['파트'].nunique()}개")
+                
+                # df3 데이터 미리보기
+                if 'df3_final' in st.session_state:
+                    st.subheader("📊 df3 최종 데이터 미리보기")
+                    st.dataframe(st.session_state['df3_final'].head(10), use_container_width=True)
                 
         except Exception as e:
             st.error(f"데이터 처리 실패: {e}")
@@ -521,10 +602,17 @@ else:
 st.markdown("""
 ## 🎯 분석 메뉴
 
-- **📊 경영 대시보드**: 월별 트렌드 및 핵심 지표 (df3 수리비 반영)
-- **👥 파트별 분석**: 파트별 성과 평가 (조직도 매핑 + df3 수리비)
-- **🏢 업체별 분석**: 디마케팅 위험도 분석 (df3 수리비 반영)
-- **📅 월별 분석**: 종합 리포트 및 다운로드 (df3 수리비 반영)
+- **📊 경영 대시보드**: 월별 트렌드 및 핵심 지표 (df3 중심)
+- **👥 파트별 분석**: 파트별 성과 평가 (df3 중심 + 조직도 매핑)
+- **🏢 업체별 분석**: 디마케팅 위험도 분석 (df3 중심)
+- **📅 월별 분석**: 종합 리포트 및 다운로드 (df3 중심)
+
+### 📋 데이터 매핑 방식 (df3 중심)
+- **df3 조직도 매핑**: 출고자(사번) → 파트, 직급, 직책
+- **df3 업체명 매핑**: df1의 년월+관리번호 → 업체명, 작업유형
+- **df1 조직도 매핑**: 정비자 → 파트, 직급, 직책 (기존 분석용)
+- **자산정보 매핑**: 관리번호 → 브랜드, 모델명
+- **만족도 매핑**: 사번 기준으로 조직도와 연동
 """)
 
 # 하단
