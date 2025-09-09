@@ -4,9 +4,29 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import calendar
+from io import BytesIO
 
 st.set_page_config(page_title="월별 종합 분석", layout="wide")
 st.title("📅 월별 종합 분석")
+
+# 엑셀 다운로드 함수
+def to_excel_download(df, filename):
+    """DataFrame을 엑셀로 변환하여 다운로드 버튼 생성"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='데이터')
+    output.seek(0)
+    return output.getvalue()
+
+# 다중 시트 엑셀 다운로드 함수
+def to_excel_multi_sheet(data_dict, filename):
+    """여러 DataFrame을 다중 시트 엑셀로 변환"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name, df in data_dict.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output.getvalue()
 
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
@@ -52,7 +72,7 @@ available_months = list(range(1, 13))
 
 selected_year = st.sidebar.selectbox("분석 년도", available_years)
 selected_month = st.sidebar.selectbox(
-    "분석 월", 
+    "분석 월",
     available_months,
     format_func=lambda x: f"{x}월"
 )
@@ -414,32 +434,61 @@ with col2:
     for issue in issues:
         st.write(f"• {issue}")
 
-# 데이터 다운로드
+# 데이터 다운로드 - 엑셀 버전
 st.markdown("---")
 st.subheader("📥 리포트 다운로드")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
-    csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
+    # 상세 데이터 다운로드
+    excel_data = to_excel_download(filtered_df, f"{selected_year}년{selected_month}월_AS상세데이터.xlsx")
     st.download_button(
-        label="📄 상세 데이터 다운로드 (CSV)",
-        data=csv_data,
-        file_name=f"{selected_year}년{selected_month}월_AS상세데이터.csv",
-        mime="text/csv"
+        label="📄 상세 데이터 다운로드 (Excel)",
+        data=excel_data,
+        file_name=f"{selected_year}년{selected_month}월_AS상세데이터.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 with col2:
+    # 파트별 요약 다운로드
     if '정비자소속' in filtered_df.columns and not filtered_df.empty:
         summary_data = filtered_df.groupby('정비자소속').agg({
             '관리번호': 'count',
             '수리비': 'sum'
         }).rename(columns={'관리번호': '건수'})
         
-        summary_csv = summary_data.to_csv(encoding='utf-8-sig')
+        summary_excel = to_excel_download(summary_data, f"{selected_year}년{selected_month}월_파트별요약.xlsx")
         st.download_button(
-            label="📊 파트별 요약 (CSV)",
-            data=summary_csv,
-            file_name=f"{selected_year}년{selected_month}월_파트별요약.csv",
-            mime="text/csv"
+            label="📊 파트별 요약 (Excel)",
+            data=summary_excel,
+            file_name=f"{selected_year}년{selected_month}월_파트별요약.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+with col3:
+    # 종합 리포트 다운로드 (다중 시트)
+    if '정비자소속' in filtered_df.columns:
+        # 여러 분석 결과를 하나의 엑셀 파일로
+        report_data = {
+            '상세데이터': filtered_df,
+            '파트별분석': filtered_df.groupby('정비자소속').agg({
+                '관리번호': 'count',
+                '수리비': ['sum', 'mean']
+            }).round(0),
+            '업체별분석': filtered_df.groupby(client_col).agg({
+                '관리번호': 'count',
+                '수리비': ['sum', 'mean']
+            }).round(0) if client_col in filtered_df.columns else pd.DataFrame()
+        }
+        
+        # 빈 데이터프레임 제거
+        report_data = {k: v for k, v in report_data.items() if not v.empty}
+        
+        multi_excel = to_excel_multi_sheet(report_data, f"{selected_year}년{selected_month}월_종합리포트.xlsx")
+        st.download_button(
+            label="📋 종합 리포트 (Excel)",
+            data=multi_excel,
+            file_name=f"{selected_year}년{selected_month}월_종합리포트.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
