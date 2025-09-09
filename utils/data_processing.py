@@ -170,8 +170,10 @@ def create_df3_with_organization(df3, df4):
             df3_processed['출고일자'] = pd.to_datetime(df3_processed['출고일자'], errors='coerce')
             df3_processed['출고년'] = df3_processed['출고일자'].dt.year
             df3_processed['출고월'] = df3_processed['출고일자'].dt.month
-            df3_processed['출고년월'] = df3_processed['출고일자'].dt.to_period('M')
+            # 문자열 형태로 년월 생성 (YYYY-MM)
+            df3_processed['출고년월'] = df3_processed['출고일자'].dt.strftime('%Y-%m')
             st.write("✅ 출고일자 및 출고년월 생성 완료")
+            st.write(f"출고년월 샘플: {df3_processed['출고년월'].dropna().head().tolist()}")
         
         # 수리비 처리 (출고금액)
         if '출고금액' in df3_processed.columns:
@@ -276,10 +278,23 @@ def merge_df3_with_df1_client_info(df3_with_org, df1):
         
         if '정비일자' in df1_temp.columns:
             df1_temp['정비일자'] = pd.to_datetime(df1_temp['정비일자'], errors='coerce')
-            df1_temp['정비년월'] = df1_temp['정비일자'].dt.to_period('M')
+            # 년월을 문자열로 추출 (YYYY-MM 형식)
+            df1_temp['정비년'] = df1_temp['정비일자'].dt.year
+            df1_temp['정비월'] = df1_temp['정비일자'].dt.month
+            df1_temp['정비년월'] = df1_temp['정비일자'].dt.strftime('%Y-%m')  # 문자열로 변환
             st.write("✅ df1 정비일자 처리 완료")
+            st.write(f"df1 정비년월 샘플: {df1_temp['정비년월'].dropna().head().tolist()}")
         else:
             st.warning("⚠️ df1에 정비일자 컬럼이 없습니다.")
+            return df3_temp
+        
+        # df3에서 출고년월도 동일한 형식으로 변환
+        if '출고년월' in df3_temp.columns:
+            # Period 객체를 문자열로 변환
+            df3_temp['출고년월_str'] = df3_temp['출고년월'].astype(str)
+            st.write(f"df3 출고년월 샘플: {df3_temp['출고년월_str'].dropna().head().tolist()}")
+        else:
+            st.error("⚠️ df3에 출고년월 컬럼이 없습니다. 먼저 조직도 매핑을 수행해주세요.")
             return df3_temp
         
         # 작업유형 통합
@@ -312,18 +327,23 @@ def merge_df3_with_df1_client_info(df3_with_org, df1):
             
             df1_mapping = df1_temp[mapping_cols].drop_duplicates(subset=['관리번호', '정비년월'])
             
-            # 데이터 타입 통일
-            df3_temp['출고년월'] = df3_temp['출고년월'].astype(str)
-            df1_mapping['정비년월'] = df1_mapping['정비년월'].astype(str)
+            st.write(f"df1 매핑 데이터: {len(df1_mapping)}건")
+            st.write("**매핑 전 데이터 타입 확인:**")
+            st.write(f"df3 출고년월 타입: {type(df3_temp['출고년월_str'].iloc[0]) if len(df3_temp) > 0 else 'N/A'}")
+            st.write(f"df1 정비년월 타입: {type(df1_mapping['정비년월'].iloc[0]) if len(df1_mapping) > 0 else 'N/A'}")
             
-            # 매핑 수행
+            # 1차 매핑: 년월 + 관리번호 기준
             df3_final = pd.merge(
                 df3_temp,
                 df1_mapping,
-                left_on=['관리번호', '출고년월'],
+                left_on=['관리번호', '출고년월_str'],
                 right_on=['관리번호', '정비년월'],
                 how='left'
             )
+            
+            # 매핑 결과 1차 확인
+            initial_mapped = df3_final[client_col].notna().sum()
+            st.write(f"1차 매핑 결과: {initial_mapped}건")
             
             # 매핑되지 않은 경우 관리번호만으로 재시도
             unmapped_mask = df3_final[client_col].isna()
@@ -353,7 +373,7 @@ def merge_df3_with_df1_client_info(df3_with_org, df1):
                 df3_final['작업유형'] = df3_final['작업유형_통합']
             
             # 임시 컬럼 제거
-            cleanup_cols = ['정비년월']
+            cleanup_cols = ['정비년월', '출고년월_str']
             if client_col != '업체명':
                 cleanup_cols.append(client_col)
             if '작업유형_통합' in df3_final.columns and '작업유형' in df3_final.columns:
@@ -363,11 +383,22 @@ def merge_df3_with_df1_client_info(df3_with_org, df1):
                 if col in df3_final.columns:
                     df3_final = df3_final.drop(col, axis=1)
             
-            # 결과 확인
+            # 최종 매핑 결과 확인
             mapped_clients = df3_final['업체명'].notna().sum()
             client_mapping_rate = (mapped_clients / len(df3_final) * 100) if len(df3_final) > 0 else 0
             
-            st.write(f"**업체명 매핑 결과: {mapped_clients}건 ({client_mapping_rate:.1f}%)**")
+            st.write(f"**최종 업체명 매핑 결과: {mapped_clients}건 ({client_mapping_rate:.1f}%)**")
+            
+            if '작업유형' in df3_final.columns:
+                mapped_work_types = df3_final['작업유형'].notna().sum()
+                st.write(f"**작업유형 매핑 결과: {mapped_work_types}건**")
+            
+            # 매핑 성공한 업체명 상위 10개 확인
+            if mapped_clients > 0:
+                top_clients = df3_final['업체명'].value_counts().head(10)
+                st.write("**매핑된 주요 업체:**")
+                for client, count in top_clients.items():
+                    st.write(f"  - {client}: {count}건")
             
             return df3_final
         else:
@@ -376,6 +407,7 @@ def merge_df3_with_df1_client_info(df3_with_org, df1):
             
     except Exception as e:
         st.error(f"df3-df1 매핑 오류: {e}")
+        st.exception(e)
         return df3_with_org
 
 @st.cache_data
