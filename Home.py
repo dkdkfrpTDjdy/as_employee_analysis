@@ -79,8 +79,7 @@ def load_static_data():
                 new_columns = df4.iloc[0].tolist()
                 df4 = df4.iloc[1:].reset_index(drop=True)
                 df4.columns = new_columns
-                st.sidebar.info("조직도: 첫 번째 행을 헤더로 사용")
-            
+
             # 컬럼명 정리
             df4.columns = [str(col).strip().replace('\n', '').replace('\r', '') for col in df4.columns]
             
@@ -92,9 +91,7 @@ def load_static_data():
                 if col in ['이름', '파트', '직급', '담당', '직책', '사번']:
                     df4[col] = df4[col].astype(str).str.strip()
                     df4[col] = df4[col].replace('nan', np.nan)
-            
-            st.sidebar.success(f"✅ 조직도 로드 완료: {len(df4)}건")
-            
+                        
         except Exception as e:
             st.sidebar.error(f"조직도 로드 오류: {e}")
             df4 = None
@@ -488,8 +485,7 @@ if uploaded_file1 is not None:
                     # 세션에 저장
                     st.session_state.satisfaction_data = df5_with_part
                     st.session_state.part_satisfaction_stats = part_satisfaction_stats
-                    
-                    st.success("✅ 만족도 데이터 처리 완료!")
+
                 
                 # 한 번에 모든 머지 수행
                 final_data = simple_merge_all(df1, df2, df3, df4, df5)
@@ -497,37 +493,6 @@ if uploaded_file1 is not None:
                 # 세션에 저장
                 st.session_state.df1_with_costs = final_data
                 st.session_state.data_loaded = True
-                
-                st.success("✅ 모든 데이터 처리 완료!")
-                
-                # 최종 결과 확인
-                st.write("**📊 최종 처리 결과:**")
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("총 레코드", f"{len(final_data):,}건")
-                
-                with col2:
-                    total_cost = final_data['수리비'].sum()
-                    st.metric("총 수리비", f"{total_cost:,.0f}원")
-                
-                with col3:
-                    if '정비자소속' in final_data.columns:
-                        part_count = final_data['정비자소속'].nunique()
-                        st.metric("파트 수", f"{part_count}개")
-                    else:
-                        st.metric("파트 수", "0개")
-                
-                with col4:
-                    if 'part_satisfaction_stats' in st.session_state and st.session_state.part_satisfaction_stats is not None:
-                        satisfaction_parts = len(st.session_state.part_satisfaction_stats)
-                        st.metric("만족도 조사 파트", f"{satisfaction_parts}개")
-                    else:
-                        st.metric("만족도 조사", "0건")
-                
-                # 미리보기
-                st.subheader("📋 데이터 미리보기")
-                st.dataframe(final_data.head(10), use_container_width=True)
                 
         except Exception as e:
             st.error(f"데이터 처리 실패: {e}")
@@ -547,77 +512,3 @@ else:
 
 # 하단
 st.markdown("---")
-
-# 조직도 매핑 상태 상세 확인
-if st.session_state.data_loaded and st.checkbox("🔍 조직도 매핑 상태 상세 확인"):
-    final_data = st.session_state.df1_with_costs
-    
-    st.subheader("조직도 매핑 상세 분석")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.write("**정비자 현황:**")
-        if '정비자' in final_data.columns:
-            unique_workers = final_data['정비자'].nunique()
-            st.write(f"• 고유 정비자: {unique_workers}명")
-            
-            # 정비자별 건수
-            worker_counts = final_data['정비자'].value_counts()
-            st.write("• 상위 5명:")
-            for worker, count in worker_counts.head(5).items():
-                st.write(f"  - {worker}: {count}건")
-    
-    with col2:
-        st.write("**파트 현황:**")
-        if '정비자소속' in final_data.columns:
-            unique_parts = final_data['정비자소속'].nunique()
-            mapped_parts = final_data['정비자소속'].notna().sum()
-            st.write(f"• 고유 파트: {unique_parts}개")
-            st.write(f"• 매핑된 건수: {mapped_parts}건")
-            
-            # 파트별 건수
-            part_counts = final_data['정비자소속'].value_counts()
-            st.write("• 파트별 건수:")
-            for part, count in part_counts.head(5).items():
-                st.write(f"  - {part}: {count}건")
-    
-    with col3:
-        st.write("**매핑 품질:**")
-        if '정비자소속' in final_data.columns:
-            total_records = len(final_data)
-            mapped_records = final_data['정비자소속'].notna().sum()
-            mapping_rate = (mapped_records / total_records * 100)
-            
-            st.write(f"• 전체 레코드: {total_records}건")
-            st.write(f"• 매핑 성공: {mapped_records}건")
-            st.write(f"• 매핑률: {mapping_rate:.1f}%")
-            
-            if mapping_rate < 50:
-                st.error("매핑률이 50% 미만입니다!")
-            elif mapping_rate < 80:
-                st.warning("매핑률이 80% 미만입니다.")
-            else:
-                st.success("매핑률이 양호합니다.")
-
-# 만족도 매핑 상태 확인
-if st.session_state.data_loaded and 'part_satisfaction_stats' in st.session_state and st.checkbox("😊 만족도 매핑 상태 확인"):
-    if st.session_state.part_satisfaction_stats is not None:
-        satisfaction_stats = st.session_state.part_satisfaction_stats
-        
-        st.subheader("만족도 매핑 상세 분석")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**파트별 만족도 현황:**")
-            st.dataframe(satisfaction_stats, use_container_width=True)
-        
-        with col2:
-            st.write("**만족도 등급 분포:**")
-            grade_counts = satisfaction_stats['만족도_등급'].value_counts()
-            for grade, count in grade_counts.items():
-                st.write(f"• {grade}: {count}개 파트")
-    else:
-        st.info("만족도 데이터가 처리되지 않았습니다.")
-
