@@ -3,9 +3,19 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from io import BytesIO
 
 st.set_page_config(page_title="업체별 디마케팅 분석", layout="wide")
 st.title("🏢 업체별 디마케팅 분석")
+
+# 엑셀 다운로드 함수
+def to_excel_download(df, filename):
+    """DataFrame을 엑셀로 변환하여 다운로드 버튼 생성"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='데이터')
+    output.seek(0)
+    return output.getvalue()
 
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
@@ -214,7 +224,7 @@ risky_clients = client_stats[client_stats['위험도점수'] >= risk_threshold].
 if len(risky_clients) == 0:
     st.info("선택한 기준에 해당하는 위험 업체가 없습니다.")
 else:
-    st.write(f"**위험도 점수 {risk_threshold} 이상 업체: {len(risky_clients)}개**")
+    st.write(f"위험도 점수 {risk_threshold} 이상 업체: {len(risky_clients)}개")
     
     for idx, (_, client) in enumerate(risky_clients.iterrows()):
         risk_icon, risk_desc = get_risk_level(client['위험도점수'])
@@ -275,95 +285,31 @@ else:
             else:
                 st.success("✅ 현재 특별한 조치 불필요")
 
-# 위험도별 상세 통계
-st.header("📊 위험도별 상세 통계")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("위험등급별 업체 통계")
-    risk_summary = client_stats.groupby('위험등급').agg({
-        '업체명': 'count',
-        '총수리비': 'sum',
-        '평균수리비': 'mean',
-        'AS건수': 'sum'
-    }).round(0)
-    risk_summary.columns = ['업체수', '총수리비합계', '평균건당수리비', '총AS건수']
-    
-    st.dataframe(
-        risk_summary.style.format({
-            '총수리비합계': '{:,.0f}원',
-            '평균건당수리비': '{:,.0f}원',
-            '총AS건수': '{:,}건'
-        }),
-        use_container_width=True
-    )
-
-with col2:
-    st.subheader("수리비 분포")
-    
-    # 수리비 구간별 분포
-    cost_bins = [0, 500000, 1000000, 2000000, 5000000, float('inf')]
-    cost_labels = ['50만원 이하', '50-100만원', '100-200만원', '200-500만원', '500만원+']
-    
-    client_stats['수리비구간'] = pd.cut(client_stats['총수리비'], bins=cost_bins, labels=cost_labels)
-    cost_distribution = client_stats['수리비구간'].value_counts()
-    
-    fig = px.bar(
-        x=cost_distribution.index,
-        y=cost_distribution.values,
-        title="총 수리비 구간별 업체 수",
-        color=cost_distribution.values,
-        color_continuous_scale='Reds'
-    )
-    fig.update_layout(height=300)
-    st.plotly_chart(fig, use_container_width=True)
-
-# 요약 통계
-st.header("📊 전체 요약")
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    high_risk_count = len(client_stats[client_stats['위험도점수'] >= 2.0])
-    st.metric("고위험 업체", f"{high_risk_count}개")
-
-with col2:
-    total_clients = len(client_stats)
-    st.metric("전체 분석 업체", f"{total_clients}개")
-
-with col3:
-    avg_risk_score = client_stats['위험도점수'].mean()
-    st.metric("평균 위험도", f"{avg_risk_score:.2f}")
-
-with col4:
-    high_risk_ratio = (high_risk_count / total_clients * 100) if total_clients > 0 else 0
-    st.metric("고위험 업체 비율", f"{high_risk_ratio:.1f}%")
-
-# 데이터 다운로드
+# 데이터 다운로드 - 엑셀 버전
 st.markdown("---")
 st.subheader("📥 분석 결과 다운로드")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    csv_data = client_stats.to_csv(index=False, encoding='utf-8-sig')
+    # 위험도 분석 결과 다운로드
+    excel_data = to_excel_download(client_stats, "업체별_위험도분석.xlsx")
     st.download_button(
-        label="📊 위험도 분석 결과 다운로드 (CSV)",
-        data=csv_data,
-        file_name="업체별_위험도분석.csv",
-        mime="text/csv"
+        label="📊 위험도 분석 결과 다운로드 (Excel)",
+        data=excel_data,
+        file_name="업체별_위험도분석.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 with col2:
-    # 상세 데이터 (업체별)
+    # 상세 데이터 다운로드
     download_columns = ['업체명', '관리번호', '정비일자', '수리비', '작업유형', '브랜드']
     available_columns = [col for col in download_columns if col in df.columns]
     detailed_data = df[available_columns].copy()
-    detailed_csv = detailed_data.to_csv(index=False, encoding='utf-8-sig')
+    detailed_excel = to_excel_download(detailed_data, "업체별_상세데이터.xlsx")
     st.download_button(
-        label="📄 업체별 상세 데이터 다운로드 (CSV)",
-        data=detailed_csv,
-        file_name="업체별_상세데이터.csv",
-        mime="text/csv"
+        label="📄 업체별 상세 데이터 다운로드 (Excel)",
+        data=detailed_excel,
+        file_name="업체별_상세데이터.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
