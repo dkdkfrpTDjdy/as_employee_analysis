@@ -1,3 +1,4 @@
+# pages/04_월별_종합_분석.py - 완전 개선된 버전 (메인 대시보드와 통합)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -146,8 +147,8 @@ if avg_cost_per_case > df['수리비'].mean() * 1.5:
 
 st.markdown("---")
 
-# 탭 구조 간소화
-tab1, tab2, tab3, tab4 = st.tabs(["👥 파트별", "🔧 고장유형별", "🏢 업체별", "💰 수리비분석"])
+# 탭 구조 - 고장유형별 탭 추가 및 개선
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["👥 파트별", "🔧 고장유형별", "🏢 업체별", "🗺️ 지역별", "💰 수리비분석"])
 
 # 탭 1: 파트별 분석
 with tab1:
@@ -203,7 +204,17 @@ with tab1:
                 fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
         
-        # 파트별 상세 테이블
+        # 파트별 상세 테이블 - 작업내용 추가
+        if '작업내용' in filtered_df.columns:
+            part_work_content = filtered_df.groupby('정비자소속')['작업내용'].apply(
+                lambda x: x.value_counts().head(2).index.tolist()
+            ).to_dict()
+            
+            part_analysis['주요작업내용'] = part_analysis.index.map(
+                lambda x: ', '.join([str(work)[:20] + "..." if len(str(work)) > 20 else str(work) 
+                                   for work in part_work_content.get(x, [])[:2]])
+            )
+        
         st.dataframe(
             part_analysis.style.format({
                 '수리비': '{:,.0f}원',
@@ -213,45 +224,140 @@ with tab1:
             use_container_width=True
         )
 
-# 탭 2: 고장유형별 분석
+# 탭 2: 고장유형별 분석 - 완전히 새로 구현
 with tab2:
     st.subheader("🔧 고장유형별 분석")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
-    # 대분류/중분류/소분류 분석
-    classification_cols = {
-        '대분류': '작업유형',
-        '중분류': '정비대상', 
-        '소분류': '정비작업'
-    }
+    with col1:
+        st.write("**수리비 상위 작업내용**")
+        
+        if '작업내용' in filtered_df.columns and filtered_df['작업내용'].notna().any():
+            work_cost_analysis = filtered_df[filtered_df['작업내용'].notna()].groupby('작업내용').agg({
+                '관리번호': 'count',
+                '수리비': 'sum'
+            }).rename(columns={'관리번호': '건수'})
+            
+            work_cost_analysis['평균수리비'] = (work_cost_analysis['수리비'] / work_cost_analysis['건수']).round(0)
+            work_cost_analysis = work_cost_analysis.sort_values('수리비', ascending=False).head(10)
+            
+            # 작업내용명 줄임
+            work_cost_display = work_cost_analysis.copy()
+            work_cost_display.index = [name[:25] + "..." if len(str(name)) > 25 else str(name) for name in work_cost_display.index]
+            
+            fig = px.bar(
+                x=work_cost_display['수리비'],
+                y=work_cost_display.index,
+                orientation='h',
+                title="작업내용별 총 수리비 (상위 10개)",
+                color=work_cost_display['수리비'],
+                color_continuous_scale='Reds'
+            )
+            fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("작업내용 데이터가 없습니다.")
     
-    for i, (title, col_name) in enumerate(classification_cols.items()):
-        with [col1, col2, col3][i]:
-            if col_name in filtered_df.columns:
-                st.write(f"**{title} 분석**")
+    with col2:
+        st.write("**파트별 주요 작업내용**")
+        
+        if '정비자소속' in filtered_df.columns and '작업내용' in filtered_df.columns:
+            # 파트별 작업내용 분석
+            part_work_data = filtered_df[filtered_df['정비자소속'].notna() & filtered_df['작업내용'].notna()]
+            
+            if not part_work_data.empty:
+                # 각 파트별 상위 작업내용 (수리비 기준)
+                part_work_cost = part_work_data.groupby(['정비자소속', '작업내용'])['수리비'].sum().reset_index()
                 
-                category_analysis = filtered_df.groupby(col_name).agg({
-                    '관리번호': 'count',
-                    '수리비': 'sum'
-                }).rename(columns={'관리번호': '건수'})
+                # 상위 5개 파트 선택
+                top_parts = part_work_data.groupby('정비자소속')['수리비'].sum().nlargest(5).index.tolist()
                 
-                category_analysis['비율(%)'] = (category_analysis['건수'] / category_analysis['건수'].sum() * 100).round(1)
-                category_analysis = category_analysis.sort_values('건수', ascending=False)
+                selected_part = st.selectbox("파트 선택", top_parts)
                 
-                # 파이 차트
-                if not category_analysis.empty:
-                    fig = px.pie(
-                        values=category_analysis['건수'],
-                        names=category_analysis.index,
-                        title=f"{title} 분포"
-                    )
-                    fig.update_layout(height=300, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                if selected_part:
+                    part_specific_work = part_work_cost[part_work_cost['정비자소속'] == selected_part].nlargest(8, '수리비')
                     
-                    # 상위 3개 표시
-                    for idx, (cat, row) in enumerate(category_analysis.head(3).iterrows()):
-                        st.write(f"{idx+1}. {cat}: {row['건수']}건 ({row['비율(%)']:.1f}%)")
+                    # 작업내용명 줄임
+                    part_specific_work['작업내용_short'] = part_specific_work['작업내용'].apply(
+                        lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
+                    )
+                    
+                    fig = px.bar(
+                        part_specific_work,
+                        x='수리비',
+                        y='작업내용_short',
+                        orientation='h',
+                        title=f"{selected_part} 파트 주요 작업내용",
+                        color='수리비',
+                        color_continuous_scale='Greens'
+                    )
+                    fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("파트별 작업내용 데이터가 없습니다.")
+        else:
+            st.info("파트 또는 작업내용 정보가 없습니다.")
+    
+    # 업체별 주요 작업내용
+    st.write("**업체별 주요 작업내용**")
+    
+    client_col = '현장명' if '현장명' in filtered_df.columns else '업체명'
+    
+    if client_col in filtered_df.columns and '작업내용' in filtered_df.columns:
+        client_work_data = filtered_df[filtered_df[client_col].notna() & filtered_df['작업내용'].notna()]
+        
+        if not client_work_data.empty:
+            # 수리비 상위 10개 업체
+            top_clients = client_work_data.groupby(client_col)['수리비'].sum().nlargest(10).index.tolist()
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                selected_client = st.selectbox("업체 선택", top_clients)
+                
+                if selected_client:
+                    client_specific_work = client_work_data[client_work_data[client_col] == selected_client].groupby('작업내용').agg({
+                        '수리비': 'sum',
+                        '관리번호': 'count'
+                    }).rename(columns={'관리번호': '건수'}).sort_values('수리비', ascending=False).head(8)
+                    
+                    # 업체명 줄임
+                    client_short = str(selected_client)[:30] + "..." if len(str(selected_client)) > 30 else str(selected_client)
+                    
+                    # 작업내용명 줄임
+                    client_work_display = client_specific_work.copy()
+                    client_work_display.index = [name[:25] + "..." if len(str(name)) > 25 else str(name) for name in client_work_display.index]
+                    
+                    fig = px.bar(
+                        x=client_work_display['수리비'],
+                        y=client_work_display.index,
+                        orientation='h',
+                        title=f"{client_short} 주요 작업내용",
+                        color=client_work_display['수리비'],
+                        color_continuous_scale='Purples'
+                    )
+                    fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                if selected_client:
+                    st.write(f"**{client_short} 작업내용 상세**")
+                    
+                    client_work_table = client_specific_work.copy()
+                    client_work_table['평균수리비'] = (client_work_table['수리비'] / client_work_table['건수']).round(0)
+                    
+                    st.dataframe(
+                        client_work_table.style.format({
+                            '수리비': '{:,.0f}원',
+                            '평균수리비': '{:,.0f}원'
+                        }),
+                        use_container_width=True
+                    )
+        else:
+            st.info("업체별 작업내용 데이터가 없습니다.")
+    else:
+        st.info("업체 또는 작업내용 정보가 없습니다.")
 
 # 탭 3: 업체별 분석
 with tab3:
@@ -263,27 +369,6 @@ with tab3:
         col1, col2 = st.columns(2)
         
         with col1:
-            # 지역별 분석
-            if '지역' in filtered_df.columns:
-                region_analysis = filtered_df.groupby('지역').agg({
-                    '관리번호': 'count',
-                    '수리비': 'sum',
-                    client_col: 'nunique'
-                }).rename(columns={'관리번호': '건수', client_col: '업체수'})
-                
-                region_analysis = region_analysis.sort_values('건수', ascending=False)
-                
-                fig = px.bar(
-                    x=region_analysis.index,
-                    y=region_analysis['건수'],
-                    title="지역별 AS 건수",
-                    color=region_analysis['건수'],
-                    color_continuous_scale='Blues'
-                )
-                fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
             # 업체별 상세 분석 (상위 10개)
             client_analysis = filtered_df.groupby(client_col).agg({
                 '관리번호': 'count',
@@ -305,11 +390,121 @@ with tab3:
                 color=top_clients_display['수리비'],
                 color_continuous_scale='Reds'
             )
+            fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # 업체별 AS 건수
+            fig2 = px.bar(
+                x=top_clients_display['건수'],
+                y=top_clients_display.index,
+                orientation='h',
+                title="AS 건수 상위 10개 업체",
+                color=top_clients_display['건수'],
+                color_continuous_scale='Blues'
+            )
+            fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # 업체별 상세 테이블 - 작업내용 추가
+        if '작업내용' in filtered_df.columns:
+            client_work_content = filtered_df.groupby(client_col)['작업내용'].apply(
+                lambda x: x.value_counts().head(2).index.tolist()
+            ).to_dict()
+            
+            client_analysis['주요작업내용'] = client_analysis.index.map(
+                lambda x: ', '.join([str(work)[:20] + "..." if len(str(work)) > 20 else str(work) 
+                                   for work in client_work_content.get(x, [])[:2]])
+            )
+        
+        st.dataframe(
+            client_analysis.head(20).style.format({
+                '수리비': '{:,.0f}원',
+                '평균수리비': '{:,.0f}원'
+            }),
+            use_container_width=True
+        )
+
+# 탭 4: 지역별 분석 - 새로 추가
+with tab4:
+    st.subheader("🗺️ 지역별 분석")
+    
+    if '지역' in filtered_df.columns and filtered_df['지역'].notna().any():
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 지역별 분석
+            region_analysis = filtered_df[filtered_df['지역'].notna()].groupby('지역').agg({
+                '관리번호': 'count',
+                '수리비': 'sum',
+                client_col: 'nunique' if client_col in filtered_df.columns else lambda x: 0
+            }).rename(columns={'관리번호': '건수', client_col: '업체수'})
+            
+            region_analysis['평균수리비'] = (region_analysis['수리비'] / region_analysis['건수']).round(0)
+            region_analysis = region_analysis.sort_values('건수', ascending=False)
+            
+            fig = px.bar(
+                x=region_analysis.index,
+                y=region_analysis['건수'],
+                title="지역별 AS 건수",
+                color=region_analysis['건수'],
+                color_continuous_scale='Blues'
+            )
             fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            fig2 = px.bar(
+                x=region_analysis.index,
+                y=region_analysis['수리비'],
+                title="지역별 총 수리비",
+                color=region_analysis['수리비'],
+                color_continuous_scale='Reds'
+            )
+            fig2.update_layout(height=400)
+            st.plotly_chart(fig2, use_container_width=True)
+        
+        # 지역별 주요 작업내용
+        if '작업내용' in filtered_df.columns:
+            st.write("**지역별 주요 작업내용**")
+            
+            region_work_data = filtered_df[filtered_df['지역'].notna() & filtered_df['작업내용'].notna()]
+            
+            if not region_work_data.empty:
+                # 지역별 작업내용 분석
+                region_work_analysis = region_work_data.groupby(['지역', '작업내용']).size().reset_index(name='건수')
+                
+                # 각 지역별 상위 작업내용
+                top_works_by_region = region_work_analysis.loc[region_work_analysis.groupby('지역')['건수'].idxmax()]
+                
+                # 작업내용명 줄임
+                top_works_by_region['작업내용_short'] = top_works_by_region['작업내용'].apply(
+                    lambda x: x[:20] + "..." if len(str(x)) > 20 else str(x)
+                )
+                
+                fig = px.bar(
+                    top_works_by_region,
+                    x='지역',
+                    y='건수',
+                    color='작업내용_short',
+                    title="지역별 주요 작업내용"
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+        
+        # 지역별 상세 테이블
+        st.dataframe(
+            region_analysis.style.format({
+                '수리비': '{:,.0f}원',
+                '평균수리비': '{:,.0f}원'
+            }),
+            use_container_width=True
+        )
+    else:
+        st.info("지역 정보가 없습니다.")
 
-# 탭 4: 수리비 분석
-with tab4:
+# 탭 5: 수리비 분석
+with tab5:
     st.subheader("💰 수리비 분석")
     
     if filtered_df['수리비'].sum() > 0:
@@ -353,12 +548,20 @@ with tab4:
             high_cost_threshold = filtered_df['수리비'].quantile(0.9)
             high_cost_cases = filtered_df[filtered_df['수리비'] >= high_cost_threshold]
             
-            if not high_cost_cases.empty and '작업유형' in high_cost_cases.columns:
+            if not high_cost_cases.empty:
                 st.write("**🚨 고액 수리 케이스 (상위 10%)**")
-                high_cost_analysis = high_cost_cases['작업유형'].value_counts().head(5)
                 
-                for work_type, count in high_cost_analysis.items():
-                    st.write(f"• {work_type}: {count}건")
+                if '작업내용' in high_cost_cases.columns:
+                    high_cost_analysis = high_cost_cases['작업내용'].value_counts().head(5)
+                    
+                    for work_type, count in high_cost_analysis.items():
+                        work_short = str(work_type)[:25] + "..." if len(str(work_type)) > 25 else str(work_type)
+                        st.write(f"• {work_short}: {count}건")
+                elif '작업유형' in high_cost_cases.columns:
+                    high_cost_analysis = high_cost_cases['작업유형'].value_counts().head(5)
+                    
+                    for work_type, count in high_cost_analysis.items():
+                        st.write(f"• {work_type}: {count}건")
 
 # 월말 리포트 요약
 st.markdown("---")
@@ -401,6 +604,23 @@ with col2:
             top_cost_client_amount = client_costs.max()
             client_short = str(top_cost_client)[:20] + "..." if len(str(top_cost_client)) > 20 else str(top_cost_client)
             issues.append(f"🟡 **{client_short}** 업체 수리비 최고 ({top_cost_client_amount:,.0f}원)")
+    
+    # 작업내용 이슈 추가
+    if '작업내용' in filtered_df.columns and filtered_df['작업내용'].notna().any():
+        work_costs = filtered_df[filtered_df['작업내용'].notna()].groupby('작업내용')['수리비'].sum()
+        if len(work_costs) > 0:
+            top_work = work_costs.idxmax()
+            top_work_amount = work_costs.max()
+            work_short = str(top_work)[:25] + "..." if len(str(top_work)) > 25 else str(top_work)
+            issues.append(f"🔧 **{work_short}** 작업 수리비 최고 ({top_work_amount:,.0f}원)")
+    
+    # 지역 이슈 추가
+    if '지역' in filtered_df.columns and filtered_df['지역'].notna().any():
+        region_costs = filtered_df[filtered_df['지역'].notna()].groupby('지역')['수리비'].sum()
+        if len(region_costs) > 0:
+            top_region = region_costs.idxmax()
+            top_region_amount = region_costs.max()
+            issues.append(f"🗺️ **{top_region}** 지역 수리비 최고 ({top_region_amount:,.0f}원)")
     
     if compare_month and case_change > 20:
         issues.append(f"📈 전월 대비 AS 건수 {case_change:.1f}% 증가")
