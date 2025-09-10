@@ -1,3 +1,4 @@
+# data_processing.py - 완전 개선된 버전
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -36,7 +37,7 @@ class DataProcessingConfig:
     # 캐시 설정
     CACHE_TTL = 3600
     
-    # 컬럼 매핑
+    # 컬럼 매핑 - 개선된 버전
     COLUMN_MAPPINGS = {
         '대분류': '작업유형',
         '중분류': '정비대상', 
@@ -100,6 +101,117 @@ def load_data(file):
         logger.error(f"파일 로드 오류: {e}")
         st.error(f"파일 로드 오류: {e}")
         return None
+
+# 작업내용 컬럼 생성 함수 - 새로 추가
+@st.cache_data
+def create_work_content_column(df):
+    """작업유형+정비대상+정비작업으로 작업내용 컬럼 생성"""
+    df_copy = df.copy()
+    
+    # 컬럼 매핑 적용
+    for old_col, new_col in DataProcessingConfig.COLUMN_MAPPINGS.items():
+        if old_col in df_copy.columns:
+            df_copy.rename(columns={old_col: new_col}, inplace=True)
+    
+    # 작업내용 컬럼 생성
+    if all(col in df_copy.columns for col in ['작업유형', '정비대상', '정비작업']):
+        # NaN이 아닌 값들만 조합
+        def combine_work_content(row):
+            parts = []
+            for col in ['작업유형', '정비대상', '정비작업']:
+                if pd.notna(row[col]) and str(row[col]).strip() != '':
+                    parts.append(str(row[col]).strip())
+            return ' > '.join(parts) if parts else np.nan
+        
+        df_copy['작업내용'] = df_copy.apply(combine_work_content, axis=1)
+        
+        # 고장유형도 함께 생성 (기존 호환성 유지)
+        mask = df_copy['작업유형'].notna() & df_copy['정비대상'].notna() & df_copy['정비작업'].notna()
+        df_copy.loc[mask, '고장유형'] = (df_copy.loc[mask, '작업유형'].astype(str) + '_' + 
+                                        df_copy.loc[mask, '정비대상'].astype(str) + '_' + 
+                                        df_copy.loc[mask, '정비작업'].astype(str))
+    
+    return df_copy
+
+# 정비자별 상세 분석을 위한 함수 - 새로 추가
+@st.cache_data
+def create_technician_analysis_data(df, org_df=None):
+    """정비자별 상세 분석 데이터 생성"""
+    if '정비자' not in df.columns:
+        return df
+    
+    df_copy = df.copy()
+    
+    # 조직도 정보 매핑
+    if org_df is not None:
+        try:
+            # 정비자와 조직도 매핑
+            org_mapping = org_df[['이름', '파트', '직급']].dropna()
+            org_mapping.columns = ['정비자', '정비자파트', '정비자직급']
+            
+            df_copy = pd.merge(df_copy, org_mapping, on='정비자', how='left')
+            
+        except Exception as e:
+            logger.warning(f"조직도 매핑 실패: {e}")
+            df_copy['정비자파트'] = df_copy.get('정비자소속', '미분류')
+            df_copy['정비자직급'] = '미분류'
+    else:
+        df_copy['정비자파트'] = df_copy.get('정비자소속', '미분류')
+        df_copy['정비자직급'] = '미분류'
+    
+    return df_copy
+
+# 만족도 분석 개선 함수 - 새로 추가
+@st.cache_data
+def analyze_satisfaction_performance(satisfaction_df, maintenance_df):
+    """만족도 성과 분석 - 최저 점수 인원 및 상세 분석"""
+    if satisfaction_df is None or '만족도점수' not in satisfaction_df.columns:
+        return None, None
+    
+    try:
+        # 이번 달 데이터 필터링 (최근 30일)
+        current_date = pd.Timestamp.now()
+        recent_date = current_date - pd.Timedelta(days=30)
+        
+        if '처리일자' in satisfaction_df.columns:
+            satisfaction_df['처리일자'] = pd.to_datetime(satisfaction_df['처리일자'], errors='coerce')
+            recent_satisfaction = satisfaction_df[satisfaction_df['처리일자'] >= recent_date]
+        else:
+            recent_satisfaction = satisfaction_df
+        
+        # 정비자별 만족도 통계
+        technician_satisfaction = recent_satisfaction.groupby('이름').agg({
+            '만족도점수': ['mean', 'min', 'count', 'std']
+        }).round(2)
+        
+        technician_satisfaction.columns = ['평균만족도', '최저만족도', '응답수', '만족도편차']
+        technician_satisfaction = technician_satisfaction.reset_index()
+        
+        # 최저 점수 5명 추출
+        lowest_performers = technician_satisfaction.nsmallest(5, '평균만족도')
+        
+        # 각 인원별 상세 정보
+        detailed_analysis = {}
+        for _, performer in lowest_performers.iterrows():
+            technician_name = performer['이름']
+            
+            # 해당 정비자의 최근 정비 이력
+            if maintenance_df is not None and '정비자' in maintenance_df.columns:
+                technician_history = maintenance_df[maintenance_df['정비자'] == technician_name]
+                
+                if not technician_history.empty:
+                    detailed_analysis[technician_name] = {
+                        '만족도통계': performer.to_dict(),
+                        '최근정비이력': technician_history.tail(10),  # 최근 10건
+                        '주요작업유형': technician_history['작업내용'].value_counts().head(5) if '작업내용' in technician_history.columns else None,
+                        '담당업체': technician_history['현장명'].value_counts().head(5) if '현장명' in technician_history.columns else None
+                    }
+        
+        return lowest_performers, detailed_analysis
+        
+    except Exception as e:
+        logger.error(f"만족도 성과 분석 중 오류: {e}")
+        return None, None
 
 def validate_data_quality(df, data_type="데이터"):
     """데이터 품질 검증 및 리포트"""
@@ -1047,3 +1159,184 @@ def normalize_names_for_matching(name):
     name = re.sub(r'[^\w가-힣]', '', name)
     
     return name if name else None
+
+# 초간단 머지 함수 - 작업내용 컬럼 추가된 완전한 버전
+@st.cache_data
+def simple_merge_all_enhanced(df1, df2=None, df3=None, df4=None, df5=None):
+    """모든 데이터를 df1에 머지 - 작업내용 컬럼 추가된 완전한 버전"""
+    
+    result = df1.copy()
+    
+    # 1. 컬럼 매핑 및 작업내용 컬럼 생성
+    result = create_work_content_column(result)
+    
+    # 2. 기본 정리
+    if '관리번호' in result.columns:
+        result['관리번호'] = result['관리번호'].astype(str)
+    
+    if '정비일자' in result.columns:
+        result['정비일자'] = pd.to_datetime(result['정비일자'], errors='coerce')
+        result['년월'] = result['정비일자'].dt.to_period('M')
+    
+    # 수리비 초기화
+    result['수리비'] = 0
+    
+    # 3. 자산 데이터 머지 (df2)
+    if df2 is not None and '관리번호' in df2.columns:
+        try:
+            # 컬럼 매핑 적용
+            df2_mapped = create_work_content_column(df2)
+            
+            asset_cols = ['관리번호']
+            if '브랜드' in df2_mapped.columns:
+                asset_cols.append('브랜드')
+            if '모델명' in df2_mapped.columns:
+                asset_cols.append('모델명')
+            
+            df2_simple = df2_mapped[asset_cols].drop_duplicates(subset='관리번호')
+            df2_simple['관리번호'] = df2_simple['관리번호'].astype(str)
+            
+            result = pd.merge(result, df2_simple, on='관리번호', how='left')
+            st.info(f"✅ 자산 데이터 머지 완료")
+            
+        except Exception as e:
+            st.warning(f"자산 데이터 머지 실패: {e}")
+    
+    # 브랜드 정리
+    if '브랜드' not in result.columns:
+        result['브랜드'] = '기타'
+    else:
+        result['브랜드'] = result['브랜드'].fillna('기타')
+    
+    # 4. 소모품 데이터로 수리비 매핑 (df3)
+    if df3 is not None and '관리번호' in df3.columns:
+        try:
+            cost_col = None
+            for col in ['출고금액', '금액', '단가']:
+                if col in df3.columns:
+                    cost_col = col
+                    break
+            
+            if cost_col:
+                df3['관리번호'] = df3['관리번호'].astype(str)
+                df3['출고금액'] = pd.to_numeric(df3[cost_col], errors='coerce').fillna(0)
+                
+                cost_summary = df3.groupby('관리번호')['출고금액'].sum().reset_index()
+                cost_summary.columns = ['관리번호', '수리비']
+                
+                if '수리비' in result.columns:
+                    result = result.drop('수리비', axis=1)
+                
+                result = pd.merge(result, cost_summary, on='관리번호', how='left')
+                result['수리비'] = result['수리비'].fillna(0)
+                
+                mapped_count = (result['수리비'] > 0).sum()
+                mapping_rate = (mapped_count / len(result) * 100)
+                st.info(f"✅ 수리비 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
+            
+        except Exception as e:
+            st.warning(f"수리비 매핑 실패: {e}")
+            result['수리비'] = 0
+    
+    # 5. 조직도 데이터로 소속 매핑 및 정비자 상세 정보 추가 (df4)
+    if df4 is not None:
+        try:
+            result = create_technician_analysis_data(result, df4)
+            
+            # 기존 매핑 로직도 유지
+            df4_clean = df4.copy()
+            
+            # 문자열 정리
+            for col in ['이름', '파트']:
+                if col in df4_clean.columns:
+                    df4_clean[col] = df4_clean[col].astype(str).str.strip()
+                    df4_clean[col] = df4_clean[col].replace(['nan', 'NaN', ''], np.nan)
+            
+            # NaN 제거
+            df4_clean = df4_clean.dropna(subset=['이름', '파트'])
+            
+            if '정비자' in result.columns and '이름' in df4_clean.columns and '파트' in df4_clean.columns:
+                result['정비자_clean'] = result['정비자'].astype(str).str.strip()
+                result['정비자_clean'] = result['정비자_clean'].replace(['nan', 'NaN', ''], np.nan)
+                
+                # 정확한 매칭만 수행
+                org_mapping = df4_clean[['이름', '파트']].set_index('이름')['파트'].to_dict()
+                
+                def map_to_part(worker_name):
+                    if pd.isna(worker_name):
+                        return np.nan
+                    return org_mapping.get(worker_name, np.nan)
+                
+                result['정비자소속'] = result['정비자_clean'].apply(map_to_part)
+                
+                # 매핑되지 않은 것들은 '미분류'로 처리
+                unmapped_mask = result['정비자소속'].isna()
+                result.loc[unmapped_mask, '정비자소속'] = '미분류'
+                
+                # 임시 컬럼 제거
+                if '정비자_clean' in result.columns:
+                    result = result.drop('정비자_clean', axis=1)
+                
+                mapped_count = result['정비자소속'].notna().sum()
+                mapping_rate = (mapped_count / len(result) * 100) if len(result) > 0 else 0
+                st.success(f"✅ 조직도 매핑 완료: {mapped_count}건 ({mapping_rate:.1f}%)")
+            
+        except Exception as e:
+            st.error(f"조직도 매핑 실패: {e}")
+            result['정비자소속'] = '미분류'
+            result['정비자파트'] = '미분류'
+            result['정비자직급'] = '미분류'
+    
+    else:
+        result['정비자소속'] = '미분류'
+        result['정비자파트'] = '미분류'
+        result['정비자직급'] = '미분류'
+    
+    # 6. 만족도 데이터 간단 매핑 (df5)
+    if df5 is not None and '관리번호' in df5.columns:
+        try:
+            df5['관리번호'] = df5['관리번호'].astype(str)
+            
+            if '답변' in df5.columns:
+                df5['만족도점수'] = pd.to_numeric(df5['답변'], errors='coerce')
+                
+                satisfaction_summary = df5.groupby('관리번호')['만족도점수'].agg([
+                    'mean', 'count'
+                ]).reset_index()
+                satisfaction_summary.columns = ['관리번호', '만족도_평균', '만족도_응답수']
+                
+                result = pd.merge(result, satisfaction_summary, on='관리번호', how='left')
+                
+                mapped_count = result['만족도_평균'].notna().sum()
+                st.info(f"✅ 만족도 매핑 완료: {mapped_count}건")
+            
+        except Exception as e:
+            st.warning(f"만족도 매핑 실패: {e}")
+    
+    # 7. 지역 정보 추출
+    result = extract_and_apply_region(result)
+    
+    # 8. 필요한 컬럼만 유지 - 작업내용 컬럼 추가
+    keep_columns = [
+        '관리번호', '정비일자', '년월', '정비자', '정비자소속', '정비자파트', '정비자직급',
+        '브랜드', '모델명', '수리비', '작업유형', '정비대상', '정비작업', '작업내용',
+        '현장명', '지역', '수리시간', '가동시간'
+    ]
+    
+    if '만족도_평균' in result.columns:
+        keep_columns.extend(['만족도_평균', '만족도_응답수'])
+    
+    final_columns = [col for col in keep_columns if col in result.columns]
+    result = result[final_columns]
+
+    # 9. AWP 파트 제외 처리
+    if '정비자소속' in result.columns:
+        before_count = len(result)
+        result = result[~result['정비자소속'].str.contains('AWP', case=False, na=False)]
+        after_count = len(result)
+        
+        if before_count != after_count:
+            excluded_count = before_count - after_count
+            st.info(f"✅ AWP 파트 제외: {excluded_count}건 제외됨")
+    
+    return result
