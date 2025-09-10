@@ -6,7 +6,7 @@ import os
 import warnings
 import re
 from difflib import get_close_matches
-from data_processing import simple_merge_all_enhanced, analyze_satisfaction_performance
+from utils.data_processing import simple_merge_all_enhanced, analyze_satisfaction_performance
 warnings.filterwarnings('ignore')
 
 # 페이지 설정
@@ -363,3 +363,4 @@ if st.session_state.data_loaded and 'lowest_performers' in st.session_state and 
                     st.write("- 동료 우수사례 학습")
     else:
         st.info("만족도 성과 분석 데이터가 없습니다.")
+
