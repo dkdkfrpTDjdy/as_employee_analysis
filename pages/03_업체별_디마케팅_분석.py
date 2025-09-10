@@ -1,3 +1,4 @@
+# pages/03_업체별_디마케팅_분석.py - 완전 개선된 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -69,7 +70,7 @@ if '정비일자' in df.columns and df['정비일자'].notna().any():
 # 최소 AS 건수 필터
 min_cases = st.sidebar.slider("최소 AS 건수", 1, 20, 3)
 
-# 업체별 통계 계산
+# 업체별 통계 계산 - 작업내용 포함
 client_stats = df.groupby('업체명').agg({
     '관리번호': 'count',
     '수리비': ['sum', 'mean'],
@@ -83,6 +84,22 @@ else:
 
 client_stats = client_stats.reset_index()
 client_stats = client_stats[client_stats['AS건수'] >= min_cases]
+
+# 작업내용 정보 추가
+if '작업내용' in df.columns:
+    client_work_content = df.groupby('업체명')['작업내용'].apply(
+        lambda x: x.value_counts().head(3).index.tolist()
+    ).to_dict()
+    
+    client_stats['주요작업내용'] = client_stats['업체명'].map(
+        lambda x: ', '.join([str(work)[:20] + "..." if len(str(work)) > 20 else str(work) 
+                           for work in client_work_content.get(x, [])[:2]])
+    )
+
+# 지역 정보 추가
+if '지역' in df.columns:
+    client_region = df.groupby('업체명')['지역'].first().to_dict()
+    client_stats['지역'] = client_stats['업체명'].map(client_region)
 
 if client_stats.empty:
     st.warning("선택한 조건에 해당하는 데이터가 없습니다.")
@@ -167,6 +184,107 @@ with col2:
     fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
     st.plotly_chart(fig2, use_container_width=True)
 
+# 지역별 업체 분석 - 새로 추가
+if '지역' in client_stats.columns:
+    st.header("🗺️ 지역별 업체 분석")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("지역별 업체 수 및 수리비")
+        
+        region_analysis = client_stats.groupby('지역').agg({
+            '업체명': 'count',
+            '총수리비': 'sum',
+            '평균수리비': 'mean'
+        }).rename(columns={'업체명': '업체수'}).round(0)
+        
+        region_analysis = region_analysis.sort_values('총수리비', ascending=False)
+        
+        fig = px.bar(
+            x=region_analysis.index,
+            y=region_analysis['총수리비'],
+            title="지역별 총 수리비",
+            color=region_analysis['총수리비'],
+            color_continuous_scale='Viridis'
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("지역별 위험도 분포")
+        
+        region_risk = client_stats.groupby(['지역', '위험등급']).size().reset_index(name='업체수')
+        
+        fig = px.bar(
+            region_risk,
+            x='지역',
+            y='업체수',
+            color='위험등급',
+            title="지역별 위험등급 분포"
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+
+# 작업내용별 업체 분석 - 새로 추가
+if '주요작업내용' in client_stats.columns:
+    st.header("🔧 작업내용별 업체 분석")
+    
+    # 주요 작업내용별 수리비 분석
+    work_content_analysis = df.groupby(['업체명', '작업내용']).agg({
+        '수리비': 'sum',
+        '관리번호': 'count'
+    }).reset_index()
+    
+    # 상위 작업내용 추출
+    top_work_contents = df['작업내용'].value_counts().head(5).index.tolist()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("주요 작업내용별 수리비")
+        
+        work_cost_summary = df.groupby('작업내용')['수리비'].sum().nlargest(10)
+        
+        # 작업내용명 줄임
+        work_cost_display = work_cost_summary.copy()
+        work_cost_display.index = [name[:25] + "..." if len(str(name)) > 25 else str(name) for name in work_cost_display.index]
+        
+        fig = px.bar(
+            x=work_cost_display.values,
+            y=work_cost_display.index,
+            orientation='h',
+            title="작업내용별 총 수리비 (상위 10개)",
+            color=work_cost_display.values,
+            color_continuous_scale='Oranges'
+        )
+        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("고비용 작업내용 업체 분포")
+        
+        if top_work_contents:
+            selected_work = st.selectbox("작업내용 선택", top_work_contents)
+            
+            work_specific_data = df[df['작업내용'] == selected_work]
+            work_client_analysis = work_specific_data.groupby('업체명')['수리비'].sum().nlargest(10)
+            
+            # 업체명 줄임
+            work_client_display = work_client_analysis.copy()
+            work_client_display.index = [name[:20] + "..." if len(str(name)) > 20 else str(name) for name in work_client_display.index]
+            
+            fig = px.bar(
+                x=work_client_display.values,
+                y=work_client_display.index,
+                orientation='h',
+                title=f"'{selected_work[:30]}...' 작업 상위 업체",
+                color=work_client_display.values,
+                color_continuous_scale='Purples'
+            )
+            fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+
 # 위험도 분석
 st.header("🚨 디마케팅 위험도 분석")
 
@@ -187,7 +305,7 @@ with col1:
         color='위험도점수',
         size='평균수리비',
         hover_name='업체명',
-        hover_data=['위험등급'],
+        hover_data=['위험등급', '지역'] if '지역' in client_display.columns else ['위험등급'],
         color_continuous_scale='Reds'
     )
     fig.update_layout(height=500)
@@ -237,15 +355,22 @@ else:
                 if '최근수리일' in client and pd.notna(client['최근수리일']):
                     st.metric("최근 수리일", client['최근수리일'].strftime('%Y-%m-%d'))
                 st.metric("위험 등급", client['위험설명'])
+                if '지역' in client and pd.notna(client['지역']):
+                    st.metric("지역", client['지역'])
             
             # 상세 분석
             client_detail = df[df['업체명'] == client['업체명']]
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 st.write("**🔧 주요 수리 유형**")
-                if '작업유형' in client_detail.columns:
+                if '작업내용' in client_detail.columns:
+                    work_contents = client_detail['작업내용'].value_counts().head(3)
+                    for work, count in work_contents.items():
+                        work_short = str(work)[:25] + "..." if len(str(work)) > 25 else str(work)
+                        st.write(f"• {work_short}: {count}건")
+                elif '작업유형' in client_detail.columns:
                     work_types = client_detail['작업유형'].value_counts().head(3)
                     for work, count in work_types.items():
                         st.write(f"• {work}: {count}건")
@@ -257,6 +382,31 @@ else:
                     for brand, count in brands.items():
                         st.write(f"• {brand}: {count}건")
             
+            with col3:
+                st.write("**👥 주요 담당 파트**")
+                if '정비자소속' in client_detail.columns:
+                    parts = client_detail['정비자소속'].value_counts().head(3)
+                    for part, count in parts.items():
+                        st.write(f"• {part}: {count}건")
+            
+            # 월별 수리비 추이 (해당 업체)
+            if '정비일자' in client_detail.columns and '년월' in client_detail.columns:
+                st.write("**📈 월별 수리비 추이**")
+                
+                monthly_trend = client_detail.groupby('년월')['수리비'].sum().tail(12)
+                monthly_trend_df = monthly_trend.reset_index()
+                monthly_trend_df['년월_str'] = monthly_trend_df['년월'].astype(str)
+                
+                if not monthly_trend_df.empty:
+                    fig = px.line(
+                        monthly_trend_df,
+                        x='년월_str',
+                        y='수리비',
+                        title=f"{client_name_display} 월별 수리비 추이 (최근 12개월)"
+                    )
+                    fig.update_layout(height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+            
             # 권고사항
             st.write("**💡 디마케팅 권고사항**")
             
@@ -264,14 +414,17 @@ else:
                 st.error("🚨 **즉시 계약 검토 필요** - 매우 높은 위험도")
                 st.write("- 계약 해지 또는 대폭적인 조건 변경 검토")
                 st.write("- 수리비 상한선 설정 또는 유상 전환")
+                st.write("- 예방정비 교육 강화로 고장 빈도 감소")
             elif client['위험도점수'] >= 2.0:
                 st.warning("⚠️ **계약 조건 재협상 검토** - 높은 위험도")
                 st.write("- 월 수리비 한도 설정")
                 st.write("- 예방정비 교육으로 고장 빈도 감소")
+                st.write("- 정기적인 장비 점검 실시")
             elif client['위험도점수'] >= 1.5:
                 st.info("💡 **모니터링 강화** - 중간 위험도")
                 st.write("- 정기적인 수리비 모니터링")
                 st.write("- 고객 교육을 통한 예방정비 강화")
+                st.write("- 분기별 수리비 리뷰")
             else:
                 st.success("✅ 현재 특별한 조치 불필요")
 
@@ -357,7 +510,10 @@ with col1:
 
 with col2:
     # 상세 데이터 (업체별)
-    download_columns = ['업체명', '관리번호', '정비일자', '수리비', '작업유형', '브랜드']
+    download_columns = ['업체명', '관리번호', '정비일자', '수리비', '작업유형', '브랜드', '작업내용']
+    if '지역' in df.columns:
+        download_columns.append('지역')
+    
     available_columns = [col for col in download_columns if col in df.columns]
     detailed_data = df[available_columns].copy()
     detailed_csv = detailed_data.to_csv(index=False, encoding='utf-8-sig')
