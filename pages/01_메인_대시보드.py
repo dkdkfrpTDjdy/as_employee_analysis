@@ -1,4 +1,4 @@
-# pages/01_경영_대시보드.py - 수정된 버전
+# pages/01_메인_대시보드.py - 완전 개선된 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,8 +6,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="경영 대시보드", layout="wide")
-st.title("📊 경영 대시보드")
+st.set_page_config(page_title="메인 대시보드", layout="wide")
+st.title("📊 메인 대시보드")
 
 # 데이터 확인
 if 'df1_with_costs' not in st.session_state:
@@ -38,7 +38,7 @@ if df.empty:
     st.error("처리 가능한 데이터가 없습니다.")
     st.stop()
 
-# 사이드바 설정 (간소화)
+# 사이드바 설정
 st.sidebar.header("📊 분석 설정")
 
 # 기간 선택
@@ -108,7 +108,7 @@ if current_avg > df['수리비'].mean() * 1.3:
 
 st.markdown("---")
 
-# 메인 분석
+# 메인 분석 - 개선된 버전 (그래프 추가)
 col1, col2 = st.columns(2)
 
 with col1:
@@ -156,55 +156,150 @@ with col1:
         st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.subheader("🚨 주요 이슈")
+    st.subheader("🚨 주요 이슈 (그래프)")
     
-    # 파트별 수리비 (상위 5개)
+    # 파트별 수리비 차트
     if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
         part_costs = current_data[current_data['정비자소속'].notna()].groupby('정비자소속')['수리비'].sum().nlargest(5)
         
         if not part_costs.empty:
-            st.write("**💰 수리비 상위 파트:**")
-            for idx, (part, cost) in enumerate(part_costs.items()):
-                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
-                st.write(f"{icon} {part}: {cost:,.0f}원")
+            fig = px.bar(
+                x=part_costs.values,
+                y=part_costs.index,
+                orientation='h',
+                title="수리비 상위 5개 파트",
+                color=part_costs.values,
+                color_continuous_scale='Reds'
+            )
+            fig.update_layout(height=400, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.write("**💰 파트별 수리비 정보 없음**")
     else:
         st.write("**💰 파트 정보 없음**")
-    
-    # 업체별 수리비 (상위 5개)
-    client_col = None
-    if '현장명' in current_data.columns and current_data['현장명'].notna().any():
-        client_col = '현장명'
-    elif '업체명' in current_data.columns and current_data['업체명'].notna().any():
-        client_col = '업체명'
-    elif '현장' in current_data.columns and current_data['현장'].notna().any():
-        client_col = '현장'
-    
-    if client_col and not current_data.empty:
-        client_costs = current_data[current_data[client_col].notna()].groupby(client_col)['수리비'].sum().nlargest(5)
-        
-        if not client_costs.empty:
-            st.write("**🏢 수리비 상위 업체:**")
-            for idx, (client, cost) in enumerate(client_costs.items()):
-                icon = "🔴" if idx == 0 else "🟡" if idx == 1 else "🟢"
-                client_short = str(client)[:15] + "..." if len(str(client)) > 15 else str(client)
-                st.write(f"{icon} {client_short}: {cost:,.0f}원")
-        else:
-            st.write("**🏢 업체별 수리비 정보 없음**")
-    else:
-        st.write("**🏢 업체 정보 없음**")
 
-# 하단 상세 분석 - 수정된 버전
+# 지역별 분석 추가 - 새로운 섹션
+st.header("🗺️ 지역별 분석")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("지역별 AS 현황")
+    
+    if '지역' in current_data.columns and current_data['지역'].notna().any():
+        region_analysis = current_data[current_data['지역'].notna()].groupby('지역').agg({
+            '관리번호': 'count',
+            '수리비': 'sum'
+        }).rename(columns={'관리번호': 'AS건수'})
+        
+        region_analysis['평균수리비'] = (region_analysis['수리비'] / region_analysis['AS건수']).round(0)
+        region_analysis = region_analysis.sort_values('수리비', ascending=False)
+        
+        # 지역별 수리비 차트
+        fig = px.bar(
+            x=region_analysis.index,
+            y=region_analysis['수리비'],
+            title="지역별 총 수리비",
+            color=region_analysis['수리비'],
+            color_continuous_scale='Blues'
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    else:
+        st.info("지역 정보가 없습니다.")
+
+with col2:
+    st.subheader("지역별 주요 작업내용")
+    
+    if '지역' in current_data.columns and '작업내용' in current_data.columns:
+        region_work_data = current_data[current_data['지역'].notna() & current_data['작업내용'].notna()]
+        
+        if not region_work_data.empty:
+            # 지역별 작업내용 분석
+            region_work_analysis = region_work_data.groupby(['지역', '작업내용']).size().reset_index(name='건수')
+            
+            # 각 지역별 상위 작업내용
+            top_works_by_region = region_work_analysis.loc[region_work_analysis.groupby('지역')['건수'].idxmax()]
+            
+            fig = px.bar(
+                top_works_by_region,
+                x='지역',
+                y='건수',
+                color='작업내용',
+                title="지역별 주요 작업내용"
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("지역별 작업내용 데이터가 없습니다.")
+    else:
+        st.info("지역 또는 작업내용 정보가 없습니다.")
+
+# 작업내용별 분석 - 새로운 섹션
+st.header("🔧 작업내용별 분석")
+
+if '작업내용' in current_data.columns and current_data['작업내용'].notna().any():
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("작업내용별 수리비")
+        
+        work_content_analysis = current_data[current_data['작업내용'].notna()].groupby('작업내용').agg({
+            '관리번호': 'count',
+            '수리비': 'sum'
+        }).rename(columns={'관리번호': 'AS건수'})
+        
+        work_content_analysis['평균수리비'] = (work_content_analysis['수리비'] / work_content_analysis['AS건수']).round(0)
+        work_content_analysis = work_content_analysis.sort_values('수리비', ascending=False).head(10)
+        
+        # 작업내용명 줄임
+        work_content_display = work_content_analysis.copy()
+        work_content_display.index = [name[:25] + "..." if len(str(name)) > 25 else str(name) for name in work_content_display.index]
+        
+        fig = px.bar(
+            x=work_content_display['수리비'],
+            y=work_content_display.index,
+            orientation='h',
+            title="작업내용별 총 수리비 (상위 10개)",
+            color=work_content_display['수리비'],
+            color_continuous_scale='Viridis'
+        )
+        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("작업내용별 빈도")
+        
+        work_frequency = current_data['작업내용'].value_counts().head(10)
+        
+        # 작업내용명 줄임
+        work_frequency_display = work_frequency.copy()
+        work_frequency_display.index = [name[:25] + "..." if len(str(name)) > 25 else str(name) for name in work_frequency_display.index]
+        
+        fig = px.bar(
+            x=work_frequency_display.values,
+            y=work_frequency_display.index,
+            orientation='h',
+            title="작업내용별 AS 건수 (상위 10개)",
+            color=work_frequency_display.values,
+            color_continuous_scale='Greens'
+        )
+        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("작업내용 정보가 없습니다.")
+
+# 하단 상세 분석 - 개선된 버전 (작업내용 컬럼 추가)
 st.header("📋 상세 분석")
 
-tab1, tab2 = st.tabs(["파트별", "업체별"])
+tab1, tab2, tab3 = st.tabs(["파트별", "업체별", "작업내용별"])
 
 with tab1:
     st.subheader("👥 파트별 분석")
     
     if '정비자소속' in current_data.columns and current_data['정비자소속'].notna().any():
-        # NaN 제거 후 분석
         valid_part_data = current_data[current_data['정비자소속'].notna()]
         
         if not valid_part_data.empty:
@@ -214,7 +309,16 @@ with tab1:
             })
             part_analysis.columns = ['건수', '총수리비', '평균수리비']
             
-            # 0으로 나누기 방지
+            # 작업내용 추가
+            if '작업내용' in valid_part_data.columns:
+                part_work_content = valid_part_data.groupby('정비자소속')['작업내용'].apply(
+                    lambda x: x.value_counts().head(3).index.tolist()
+                ).to_dict()
+                
+                part_analysis['주요작업내용'] = part_analysis.index.map(
+                    lambda x: ', '.join(part_work_content.get(x, [])[:2])
+                )
+            
             part_analysis['효율성'] = np.where(
                 part_analysis['총수리비'] > 0,
                 part_analysis['건수'] / part_analysis['총수리비'] * 1000000,
@@ -223,12 +327,15 @@ with tab1:
             
             part_analysis = part_analysis.sort_values('총수리비', ascending=False)
             
+            # 포맷팅
+            format_dict = {
+                '총수리비': '{:,.0f}원',
+                '평균수리비': '{:,.0f}원',
+                '효율성': '{:.2f}'
+            }
+            
             st.dataframe(
-                part_analysis.style.format({
-                    '총수리비': '{:,.0f}원',
-                    '평균수리비': '{:,.0f}원',
-                    '효율성': '{:.2f}'
-                }),
+                part_analysis.style.format(format_dict),
                 use_container_width=True
             )
         else:
@@ -239,7 +346,9 @@ with tab1:
 with tab2:
     st.subheader("🏢 업체별 분석")
     
-    if client_col and client_col in current_data.columns:
+    client_col = '현장명' if '현장명' in current_data.columns else '업체명'
+    
+    if client_col in current_data.columns:
         valid_client_data = current_data[current_data[client_col].notna()]
         
         if not valid_client_data.empty:
@@ -248,6 +357,17 @@ with tab2:
                 '수리비': ['sum', 'mean']
             })
             client_analysis.columns = ['건수', '총수리비', '평균수리비']
+            
+            # 작업내용 추가
+            if '작업내용' in valid_client_data.columns:
+                client_work_content = valid_client_data.groupby(client_col)['작업내용'].apply(
+                    lambda x: x.value_counts().head(2).index.tolist()
+                ).to_dict()
+                
+                client_analysis['주요작업내용'] = client_analysis.index.map(
+                    lambda x: ', '.join(client_work_content.get(x, [])[:2])
+                )
+            
             client_analysis = client_analysis.sort_values('총수리비', ascending=False).head(20)
             
             st.dataframe(
@@ -261,6 +381,42 @@ with tab2:
             st.info("업체별 데이터가 없습니다.")
     else:
         st.info("업체 정보가 없습니다.")
+
+with tab3:
+    st.subheader("🔧 작업내용별 상세 분석")
+    
+    if '작업내용' in current_data.columns and current_data['작업내용'].notna().any():
+        work_content_data = current_data[current_data['작업내용'].notna()]
+        
+        work_content_analysis = work_content_data.groupby('작업내용').agg({
+            '관리번호': 'count',
+            '수리비': ['sum', 'mean'],
+            '정비자소속': lambda x: x.mode().iloc[0] if not x.mode().empty else 'N/A'
+        })
+        work_content_analysis.columns = ['건수', '총수리비', '평균수리비', '주요담당파트']
+        
+        # 업체 정보 추가
+        if client_col in work_content_data.columns:
+            work_client_info = work_content_data.groupby('작업내용')[client_col].apply(
+                lambda x: x.value_counts().head(2).index.tolist()
+            ).to_dict()
+            
+            work_content_analysis['주요업체'] = work_content_analysis.index.map(
+                lambda x: ', '.join([str(c)[:15] + "..." if len(str(c)) > 15 else str(c) 
+                                   for c in work_client_info.get(x, [])[:2]])
+            )
+        
+        work_content_analysis = work_content_analysis.sort_values('총수리비', ascending=False).head(15)
+        
+        st.dataframe(
+            work_content_analysis.style.format({
+                '총수리비': '{:,.0f}원',
+                '평균수리비': '{:,.0f}원'
+            }),
+            use_container_width=True
+        )
+    else:
+        st.info("작업내용 정보가 없습니다.")
 
 # 액션 아이템
 st.markdown("---")
@@ -276,6 +432,19 @@ if case_change > 30:
 
 if avg_change > 25:
     action_items.append(f"⚠️ **단가 상승**: 건당 평균 {avg_change:.1f}% 상승 → 수리 품질 점검")
+
+# 작업내용별 이슈 추가
+if '작업내용' in current_data.columns and current_data['작업내용'].notna().any():
+    high_cost_work = current_data[current_data['작업내용'].notna()].groupby('작업내용')['수리비'].sum().nlargest(1)
+    if not high_cost_work.empty:
+        work_name = high_cost_work.index[0][:30] + "..." if len(high_cost_work.index[0]) > 30 else high_cost_work.index[0]
+        action_items.append(f"🔧 **고비용 작업**: '{work_name}' → {high_cost_work.iloc[0]:,.0f}원")
+
+# 지역별 이슈 추가
+if '지역' in current_data.columns and current_data['지역'].notna().any():
+    high_cost_region = current_data[current_data['지역'].notna()].groupby('지역')['수리비'].sum().nlargest(1)
+    if not high_cost_region.empty:
+        action_items.append(f"🗺️ **고비용 지역**: {high_cost_region.index[0]} → {high_cost_region.iloc[0]:,.0f}원")
 
 if not action_items:
     action_items.append("✅ 현재 특이사항 없음 - 정상 운영 중")
