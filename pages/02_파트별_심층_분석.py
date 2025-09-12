@@ -224,6 +224,7 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체", t
                 x='년월_str',
                 y='수리비',
                 color='정비자',
+                color_discrete_map=part_colors,
                 title=f"{part_name} 상위 10명 정비자 월별 수리비 추이"
             )
             fig.update_layout(height=500)
