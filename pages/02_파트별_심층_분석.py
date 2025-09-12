@@ -21,12 +21,12 @@ def create_part_color_mapping(parts_list):
     """파트별 심플한 색상 매핑 생성"""
     # 심플하고 구분되는 색상들
     colors = [
-        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
-        '#aec7e8', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5',
-        '#c49c94', '#f7b6d3', '#c7c7c7', '#dbdb8d', '#9edae5'
+        "#0d8fec", "#2b99e6", "#57a9e4", "#7bb8e9", "#a3cbee",
+        "#065d9b", "#1c5a86", "#357aa8", "#4d90c0", "#6aa8d6",
+        "#98c3e6", "#b5d2ed", "#cce0f3", "#d9e9f7", "#e6f2fa",
+        "#5f8cac", "#7ba1bd", "#97b6cd", "#b3cbdd", "#cfdfec"
     ]
-    
+
     color_mapping = {}
     for i, part in enumerate(sorted(parts_list)):
         color_mapping[part] = colors[i % len(colors)]
