@@ -353,7 +353,7 @@ if selected_parts:
                 st.metric("평균 수리시간", "데이터 없음")
         
         # 만족도 메트릭 추가 - 안전한 버전
-        if satisfaction_columns and kip_cols == 5:
+        if satisfaction_columns and kpi_cols == 5:
             with cols[4]:
                 # 실제 데이터에서 만족도 컬럼 찾기
                 available_satisfaction_cols = []
@@ -666,3 +666,4 @@ with col2:
         file_name="파트별_상세데이터.csv",
         mime="text/csv"
     )
+
