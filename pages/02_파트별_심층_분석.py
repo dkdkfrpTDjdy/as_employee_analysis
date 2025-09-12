@@ -1,4 +1,4 @@
-# pages/02_파트별_심층_분석.py - 파트별 탭 동일 구성 버전
+# pages/02_파트별_심층_분석.py - 파트별 색상 일관성 버전
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,6 +14,25 @@ if 'df1_with_costs' not in st.session_state:
     st.stop()
 
 df = st.session_state.df1_with_costs.copy()
+
+# 파트별 색상 매핑 생성
+@st.cache_data
+def create_part_color_mapping(parts_list):
+    """파트별 고유 색상 매핑 생성"""
+    # 다양한 색상 팔레트 정의
+    colors = [
+        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+        '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+        '#F8C471', '#82E0AA', '#F1948A', '#85C1E9', '#D7BDE2',
+        '#A3E4D7', '#F9E79F', '#D5A6BD', '#AED6F1', '#A9DFBF',
+        '#FAD7A0', '#D2B4DE', '#AED6F1', '#A3E4D7', '#F7DC6F'
+    ]
+    
+    color_mapping = {}
+    for i, part in enumerate(sorted(parts_list)):
+        color_mapping[part] = colors[i % len(colors)]
+    
+    return color_mapping
 
 # 데이터 전처리
 @st.cache_data(show_spinner=False)
@@ -46,6 +65,10 @@ if '정비자소속' not in df.columns or df['정비자소속'].isna().all():
     st.error("파트 정보가 없습니다. 조직도 데이터가 올바르게 매핑되었는지 확인해주세요.")
     st.stop()
 
+# 파트별 색상 매핑 생성
+available_parts = df['정비자소속'].dropna().unique()
+part_colors = create_part_color_mapping(available_parts)
+
 # 사이드바 필터
 st.sidebar.header("🔧 분석 옵션")
 
@@ -65,6 +88,11 @@ if '정비일자' in df.columns and df['정비일자'].notna().any():
         start_date, end_date = date_range
         df = df[(df['정비일자'].dt.date >= start_date) & 
                 (df['정비일자'].dt.date <= end_date)]
+
+# 색상 범례 표시
+st.sidebar.header("🎨 파트별 색상")
+for part, color in list(part_colors.items())[:10]:  # 상위 10개만 표시
+    st.sidebar.markdown(f'<div style="display: flex; align-items: center;"><div style="width: 20px; height: 20px; background-color: {color}; margin-right: 10px; border-radius: 3px;"></div><span>{part}</span></div>', unsafe_allow_html=True)
 
 # 만족도 컬럼 확인
 satisfaction_cols = []
@@ -138,9 +166,9 @@ def calculate_technician_stats(df_input):
     
     return technician_stats
 
-# 정비자 분석 표시 함수
-def display_technician_analysis(technician_stats, df_data, part_name="전체"):
-    """정비자 분석을 표시하는 공통 함수"""
+# 정비자 분석 표시 함수 (색상 적용)
+def display_technician_analysis(technician_stats, df_data, part_name="전체", target_part=None):
+    """정비자 분석을 표시하는 공통 함수 - 색상 적용"""
     
     # 상위 정비자 시각화
     col1, col2 = st.columns(2)
@@ -150,14 +178,31 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체"):
         top_technicians_cost = technician_stats.head(15)
         
         if not top_technicians_cost.empty:
-            fig = px.bar(
-                top_technicians_cost,
-                x='총수리비',
-                y='정비자',
-                color='정비자소속',
-                title=f"{part_name} 정비자별 총 수리비",
-                text='총수리비'
-            )
+            # 색상 매핑 적용
+            if target_part and target_part in part_colors:
+                # 특정 파트인 경우 해당 파트 색상 사용
+                color_discrete_map = {target_part: part_colors[target_part]}
+                fig = px.bar(
+                    top_technicians_cost,
+                    x='총수리비',
+                    y='정비자',
+                    color='정비자소속',
+                    color_discrete_map=color_discrete_map,
+                    title=f"{part_name} 정비자별 총 수리비",
+                    text='총수리비'
+                )
+            else:
+                # 전체인 경우 파트별 색상 사용
+                fig = px.bar(
+                    top_technicians_cost,
+                    x='총수리비',
+                    y='정비자',
+                    color='정비자소속',
+                    color_discrete_map=part_colors,
+                    title=f"{part_name} 정비자별 총 수리비",
+                    text='총수리비'
+                )
+            
             fig.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
             fig.update_traces(texttemplate='%{text:,.0f}원', textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
@@ -167,14 +212,29 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체"):
         top_technicians_volume = technician_stats.nlargest(15, 'AS건수')
         
         if not top_technicians_volume.empty:
-            fig = px.bar(
-                top_technicians_volume,
-                x='AS건수',
-                y='정비자',
-                color='정비자소속',
-                title=f"{part_name} 정비자별 AS 건수",
-                text='AS건수'
-            )
+            # 색상 매핑 적용
+            if target_part and target_part in part_colors:
+                color_discrete_map = {target_part: part_colors[target_part]}
+                fig = px.bar(
+                    top_technicians_volume,
+                    x='AS건수',
+                    y='정비자',
+                    color='정비자소속',
+                    color_discrete_map=color_discrete_map,
+                    title=f"{part_name} 정비자별 AS 건수",
+                    text='AS건수'
+                )
+            else:
+                fig = px.bar(
+                    top_technicians_volume,
+                    x='AS건수',
+                    y='정비자',
+                    color='정비자소속',
+                    color_discrete_map=part_colors,
+                    title=f"{part_name} 정비자별 AS 건수",
+                    text='AS건수'
+                )
+            
             fig.update_layout(height=600, yaxis={'categoryorder': 'total ascending'})
             fig.update_traces(texttemplate='%{text}건', textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
@@ -190,11 +250,20 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체"):
         monthly_technician_data['년월_str'] = monthly_technician_data['년월'].astype(str)
         
         if not monthly_technician_data.empty:
+            # 정비자별 색상 매핑 (파트 색상 기반)
+            technician_colors = {}
+            for _, row in monthly_technician_data.iterrows():
+                part = row['정비자소속']
+                technician = row['정비자']
+                if part in part_colors:
+                    technician_colors[technician] = part_colors[part]
+            
             fig = px.line(
                 monthly_technician_data,
                 x='년월_str',
                 y='수리비',
                 color='정비자',
+                color_discrete_map=technician_colors,
                 title=f"{part_name} 상위 10명 정비자 월별 수리비 추이",
                 hover_data=['정비자소속']
             )
@@ -277,7 +346,7 @@ with tab1:
     part_stats['효율성점수'] = (part_stats['AS건수'] / part_stats['총수리비'] * 1000000).round(2)
     part_stats = part_stats.sort_values('총수리비', ascending=False)
 
-    # 상위 파트 시각화
+    # 상위 파트 시각화 (색상 적용)
     col1, col2 = st.columns(2)
 
     with col1:
@@ -289,8 +358,8 @@ with tab1:
             x='총수리비', 
             y='정비자소속',
             orientation='h',
-            color='총수리비',
-            color_continuous_scale='Reds'
+            color='정비자소속',
+            color_discrete_map=part_colors
         )
         fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
@@ -303,13 +372,13 @@ with tab1:
             x='AS건수',
             y='정비자소속', 
             orientation='h',
-            color='AS건수',
-            color_continuous_scale='Blues'
+            color='정비자소속',
+            color_discrete_map=part_colors
         )
         fig2.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig2, use_container_width=True)
 
-    # 만족도 차트 추가
+    # 만족도 차트 추가 (색상 적용)
     if satisfaction_columns:
         st.subheader("😊 파트별 고객 만족도")
         
@@ -323,8 +392,8 @@ with tab1:
                 x=main_satisfaction_col,
                 y='정비자소속',
                 orientation='h',
-                color=main_satisfaction_col,
-                color_continuous_scale='Greens',
+                color='정비자소속',
+                color_discrete_map=part_colors,
                 title="파트별 평균 만족도"
             )
             fig3.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
@@ -400,7 +469,10 @@ with tab2:
                     st.warning(f"{part} 파트에 해당하는 정비자가 없습니다.")
                     continue
                 
-                # 파트 내 정비자 KPI
+                # 파트 내 정비자 KPI (파트 색상으로 표시)
+                part_color = part_colors.get(part, '#FF6B6B')
+                st.markdown(f'<div style="background-color: {part_color}20; padding: 10px; border-radius: 5px; margin-bottom: 20px;"><h4 style="color: {part_color}; margin: 0;">📊 {part} 파트 KPI</h4></div>', unsafe_allow_html=True)
+                
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
@@ -418,8 +490,8 @@ with tab2:
                     avg_part_efficiency = part_technician_stats['효율성점수'].mean()
                     st.metric("파트 평균 효율성", f"{avg_part_efficiency:.2f}")
                 
-                # 파트별 정비자 분석 표시 (전체와 동일한 구성)
-                display_technician_analysis(part_technician_stats, part_data, part)
+                # 파트별 정비자 분석 표시 (해당 파트 색상 적용)
+                display_technician_analysis(part_technician_stats, part_data, part, part)
                 
                 # 추가: 개별 정비자 상세 분석 (기존 코드 유지)
                 st.markdown("---")
@@ -489,7 +561,7 @@ with tab2:
                         else:
                             st.write("브랜드 데이터 없음")
                     
-                    # 월별 수리비 추이
+                    # 월별 수리비 추이 (파트 색상 적용)
                     if '년월' in tech_data.columns:
                         st.write("**📈 월별 수리비 추이**")
                         monthly_data = tech_data.groupby('년월')['수리비'].sum().reset_index()
@@ -501,7 +573,8 @@ with tab2:
                                 x='년월_str',
                                 y='수리비',
                                 title=f"{selected_technician} 월별 수리비 추이",
-                                markers=True
+                                markers=True,
+                                color_discrete_sequence=[part_color]
                             )
                             fig.update_layout(height=300)
                             st.plotly_chart(fig, use_container_width=True)
@@ -523,8 +596,9 @@ with tab3:
                 st.markdown("---")
                 
             part_data = df[df['정비자소속'] == part]
+            part_color = part_colors.get(part, '#FF6B6B')
             
-            st.subheader(f"🔧 {part} 파트 상세 분석")
+            st.markdown(f'<div style="background-color: {part_color}20; padding: 15px; border-radius: 10px; margin-bottom: 20px;"><h3 style="color: {part_color}; margin: 0;">🔧 {part} 파트 상세 분석</h3></div>', unsafe_allow_html=True)
             
             # 파트 KPI - 만족도 포함
             kpi_cols = 4
@@ -613,7 +687,7 @@ with tab3:
                 else:
                     st.write("업체 데이터 없음")
 
-    # 파트 간 비교 분석
+    # 파트 간 비교 분석 (색상 적용)
     if len(selected_parts) > 1:
         st.markdown("---")
         st.header("⚖️ 선택된 파트 간 비교")
@@ -646,7 +720,7 @@ with tab3:
         
         comparison_df = pd.DataFrame(comparison_data)
         
-        # 비교 차트
+        # 비교 차트 (색상 적용)
         chart_cols = 2 if '평균만족도' not in comparison_df.columns else 3
         cols = st.columns(chart_cols)
         
@@ -656,8 +730,8 @@ with tab3:
                 x='파트',
                 y='총수리비',
                 title="파트별 총 수리비 비교",
-                color='총수리비',
-                color_continuous_scale='Viridis'
+                color='파트',
+                color_discrete_map=part_colors
             )
             st.plotly_chart(fig, use_container_width=True)
         
@@ -667,12 +741,12 @@ with tab3:
                 x='파트',
                 y='평균수리비',
                 title="파트별 평균 수리비 비교",
-                color='평균수리비',
-                color_continuous_scale='Plasma'
+                color='파트',
+                color_discrete_map=part_colors
             )
             st.plotly_chart(fig, use_container_width=True)
         
-        # 만족도 비교 차트
+        # 만족도 비교 차트 (색상 적용)
         if chart_cols == 3 and '평균만족도' in comparison_df.columns:
             with cols[2]:
                 fig = px.bar(
@@ -680,12 +754,12 @@ with tab3:
                     x='파트',
                     y='평균만족도',
                     title="파트별 평균 만족도 비교",
-                    color='평균만족도',
-                    color_continuous_scale='Greens'
+                    color='파트',
+                    color_discrete_map=part_colors
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-# 파트 성과 랭킹
+# 파트 성과 랭킹 (색상 적용)
 st.markdown("---")
 st.header("🏆 파트 성과 랭킹")
 
@@ -724,7 +798,9 @@ with cols[0]:
     
     for idx, (_, row) in enumerate(efficiency_ranking.iterrows()):
         medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-        st.write(f"{medal} **{row['정비자소속']}**")
+        part_name = row['정비자소속']
+        part_color = part_colors.get(part_name, '#FF6B6B')
+        st.markdown(f'{medal} <span style="color: {part_color}; font-weight: bold;">{part_name}</span>', unsafe_allow_html=True)
         st.write(f"   건당 수리비: {row['건당수리비']:,.0f}원 ({row['AS건수']}건)")
 
 with cols[1]:
@@ -733,10 +809,12 @@ with cols[1]:
     
     for idx, (_, row) in enumerate(volume_ranking.iterrows()):
         medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-        st.write(f"{medal} **{row['정비자소속']}**")
+        part_name = row['정비자소속']
+        part_color = part_colors.get(part_name, '#FF6B6B')
+        st.markdown(f'{medal} <span style="color: {part_color}; font-weight: bold;">{part_name}</span>', unsafe_allow_html=True)
         st.write(f"   AS 건수: {row['AS건수']:,}건 (총 {row['총수리비']:,.0f}원)")
 
-# 만족도 랭킹 추가 - 안전한 버전
+# 만족도 랭킹 추가 - 안전한 버전 (색상 적용)
 if satisfaction_columns and ranking_cols == 3:
     with cols[2]:
         st.subheader("😊 고객 만족도 랭킹")
@@ -750,7 +828,9 @@ if satisfaction_columns and ranking_cols == 3:
             
             for idx, (_, row) in enumerate(satisfaction_ranking.iterrows()):
                 medal = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"{idx+1}."
-                st.write(f"{medal} **{row['정비자소속']}**")
+                part_name = row['정비자소속']
+                part_color = part_colors.get(part_name, '#FF6B6B')
+                st.markdown(f'{medal} <span style="color: {part_color}; font-weight: bold;">{part_name}</span>', unsafe_allow_html=True)
                 st.write(f"   만족도: {row[satisfaction_col]:.2f}점 ({row['AS건수']}건)")
         else:
             st.write("만족도 데이터가 있는 파트가 없습니다.")
