@@ -96,10 +96,10 @@ for col in df.columns:
 
 satisfaction_columns = satisfaction_cols.copy()
 
-# 정비자별 통계 계산 함수
+# 정비자별 통계 계산 함수 - 업체명 추가
 @st.cache_data
 def calculate_technician_stats(df_input):
-    """정비자별 통계 계산"""
+    """정비자별 통계 계산 - 업체명 포함"""
     # 정비자별 통계 계산 - 더 상세하게
     technician_agg_dict = {
         '관리번호': 'count',
@@ -140,6 +140,25 @@ def calculate_technician_stats(df_input):
             lambda x: x.value_counts().head(1).index[0] if not x.value_counts().empty else 'N/A'
         ).to_dict()
         technician_stats['주요작업내용'] = technician_stats['정비자'].map(technician_work)
+    
+    # 업체명 추가 - 여러 컬럼명 확인
+    company_col = None
+    for col in ['업체명', '현장명', '현장', '고객명', '회사명', '업체']:
+        if col in df_input.columns and df_input[col].notna().sum() > 0:
+            company_col = col
+            break
+    
+    if company_col:
+        technician_company = df_input.groupby('정비자')[company_col].apply(
+            lambda x: x.value_counts().head(1).index[0] if not x.value_counts().empty else 'N/A'
+        ).to_dict()
+        technician_stats['주요업체명'] = technician_stats['정비자'].map(technician_company)
+        
+        # 업체 방문 횟수도 추가
+        technician_company_count = df_input.groupby('정비자')[company_col].apply(
+            lambda x: x.value_counts().head(1).iloc[0] if not x.value_counts().empty else 0
+        ).to_dict()
+        technician_stats['주요업체방문횟수'] = technician_stats['정비자'].map(technician_company_count)
     
     # 정비자 직급 추가 (있는 경우)
     if '정비자직급' in df_input.columns:
@@ -233,7 +252,7 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체", t
     # 정비자 상세 테이블
     st.subheader(f"📋 {part_name} 정비자 상세 통계")
     
-    # 표시할 컬럼 선택
+    # 표시할 컬럼 선택 - 업체명 추가
     display_tech_columns = ['정비자', '정비자소속', 'AS건수', '총수리비', '평균수리비', '건당수리비', '주요브랜드']
     
     if '주요작업유형' in technician_stats.columns:
@@ -242,6 +261,10 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체", t
         display_tech_columns.append('주요정비대상')
     if '주요작업내용' in technician_stats.columns:
         display_tech_columns.append('주요작업내용')
+    if '주요업체명' in technician_stats.columns:
+        display_tech_columns.append('주요업체명')
+    if '주요업체방문횟수' in technician_stats.columns:
+        display_tech_columns.append('주요업체방문횟수')
     if '직급' in technician_stats.columns:
         display_tech_columns.append('직급')
     if '파트' in technician_stats.columns:
@@ -256,7 +279,8 @@ def display_technician_analysis(technician_stats, df_data, part_name="전체", t
         'AS건수': '{:,}건',
         '총수리비': '{:,.0f}원',
         '평균수리비': '{:,.0f}원',
-        '건당수리비': '{:,.0f}원'
+        '건당수리비': '{:,.0f}원',
+        '주요업체방문횟수': '{:,}회'
     }
     
     if '평균수리시간' in display_tech_stats.columns:
@@ -485,8 +509,8 @@ with tab2:
                     with col5:
                         st.metric("효율성점수", f"{tech_info['효율성점수']:.2f}")
                     
-                    # 상세 분석
-                    col1, col2, col3 = st.columns(3)
+                    # 상세 분석 - 업체명 추가
+                    col1, col2, col3, col4 = st.columns(4)
                     
                     with col1:
                         st.write("**🔨 주요 작업 유형**")
@@ -517,6 +541,24 @@ with tab2:
                                 st.write(f"• {brand}: {count}건 ({percentage:.1f}%)")
                         else:
                             st.write("브랜드 데이터 없음")
+                    
+                    with col4:
+                        st.write("**🏢 자주 방문한 업체**")
+                        # 업체명 컬럼 찾기
+                        company_col = None
+                        for col in ['업체명', '현장명', '현장', '고객명', '회사명', '업체']:
+                            if col in tech_data.columns and tech_data[col].notna().sum() > 0:
+                                company_col = col
+                                break
+                        
+                        if company_col:
+                            companies = tech_data[company_col].value_counts().head(5)
+                            for company, count in companies.items():
+                                percentage = (count / len(tech_data) * 100)
+                                company_short = str(company)[:15] + "..." if len(str(company)) > 15 else str(company)
+                                st.write(f"• {company_short}: {count}회 ({percentage:.1f}%)")
+                        else:
+                            st.write("업체 데이터 없음")
                     
                     # 월별 수리비 추이
                     if '년월' in tech_data.columns:
@@ -805,6 +847,12 @@ with col1:
 
 with col2:
     download_columns = ['정비자소속', '정비자', '관리번호', '정비일자', '수리비', '작업유형', '정비대상', '작업내용']
+    
+    # 업체명 컬럼 추가
+    for col in ['업체명', '현장명', '현장', '고객명', '회사명', '업체']:
+        if col in df.columns:
+            download_columns.append(col)
+            break
     
     # 만족도 컬럼도 다운로드에 포함
     if satisfaction_columns:
